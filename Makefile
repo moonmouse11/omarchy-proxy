@@ -37,9 +37,9 @@ typecheck: dev ## Run mypy
 
 clean: ## Remove caches and build artifacts
 	rm -rf $(VENV) .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov build dist *.egg-info
-	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	find . -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 
-install: dev ## Install the plugin backend and systemd user unit
+install: ## Install the plugin backend and systemd user unit
 	./install.sh
 
 uninstall: ## Remove installed files; keeps user config/state
