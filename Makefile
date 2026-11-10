@@ -1,8 +1,6 @@
-.PHONY: help install uninstall test lint typecheck coverage clean dev
+.PHONY: help install uninstall test lint typecheck coverage clean dev lock upgrade
 
 VENV ?= .venv
-PY := $(VENV)/bin/python
-PIP := $(VENV)/bin/pip
 PYTEST := $(VENV)/bin/pytest
 RUFF := $(VENV)/bin/ruff
 MYPY := $(VENV)/bin/mypy
@@ -10,13 +8,17 @@ MYPY := $(VENV)/bin/mypy
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
 
-$(VENV)/bin/activate: pyproject.toml
-	python3 -m venv $(VENV)
-	$(PIP) install -U pip
-	$(PIP) install -e '.[dev]'
+$(VENV)/bin/activate: pyproject.toml uv.lock
+	uv sync --extra dev
 	touch $(VENV)/bin/activate
 
-dev: $(VENV)/bin/activate ## Create .venv and install package with dev deps
+dev: $(VENV)/bin/activate ## Create .venv and install package with dev deps (via uv sync)
+
+lock: ## Regenerate uv.lock from pyproject.toml
+	uv lock
+
+upgrade: ## Upgrade all locked dependencies to latest compatible versions
+	uv lock --upgrade
 
 test: dev ## Run unit tests
 	$(PYTEST)
