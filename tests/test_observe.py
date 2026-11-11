@@ -111,6 +111,12 @@ def test_status_reads_cache_without_sleeping(tmp_path: Path) -> None:
     )
     assert status_report(tmp_path)["health_error"] == "timeout"
     assert cold["health"] == "ok"
+    assert "server_id" not in cold
+    (tmp_path / "current.json").write_text(
+        json.dumps({"state": "running", "health": "ok", "server_id": "abc"}),
+        encoding="utf-8",
+    )
+    assert status_report(tmp_path)["server_id"] == "abc"
     assert warm == cold
     assert cold_ms < 500
     assert warm_ms < 100

@@ -31,6 +31,8 @@ def status_report(
     }
     if current and isinstance(current.get("health_error"), str):
         report["health_error"] = current["health_error"]
+    if current and isinstance(current.get("server_id"), str):
+        report["server_id"] = current["server_id"]
     geo = _read_json(root / "geo.json")
     if geo and isinstance(geo.get("query"), str):
         report["exit_ip"] = geo["query"]

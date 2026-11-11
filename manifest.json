@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "omarchy-proxy",
+  "name": "Proxy",
+  "version": "0.1.0",
+  "description": "Connect this machine to a remote proxy and show its status in the bar",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Widget.qml"
+  },
+  "barWidget": {
+    "displayName": "Proxy",
+    "defaultSection": "right"
+  }
+}
