@@ -1,17 +1,34 @@
 """Parse and re-serialize proxy share URIs.
 
-Failures return a :class:`ParseError` and never raise. Task 2.2 covers
-``socks5``, ``socks5h``, ``http``, and ``https``. Other supported schemes are
-rejected with ``unsupported_scheme`` until their parsers land.
+Failures return a :class:`ParseError` and never raise. Implemented schemes:
+``socks5``, ``socks5h``, ``http``, ``https``, and ``ss`` (SIP002 and legacy
+base64). Other supported schemes return ``not_implemented``.
 """
 
 from __future__ import annotations
 
+import base64
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
-from omarchy_proxy.model import HttpProxyServer, Server, Socks5Server, TlsParams
+from omarchy_proxy.model import HttpProxyServer, Server, ShadowsocksServer, Socks5Server, TlsParams
 
 _SIMPLE = frozenset({"socks5", "socks5h", "http", "https"})
+_SS_METHODS = frozenset(
+    {
+        "aes-128-gcm",
+        "aes-256-gcm",
+        "chacha20-ietf-poly1305",
+        "2022-blake3-aes-128-gcm",
+        "2022-blake3-aes-256-gcm",
+        "2022-blake3-chacha20-poly1305",
+        "chacha20-ietf",
+        "aes-128-cfb",
+        "aes-192-cfb",
+        "aes-256-cfb",
+        "aes-128-ctr",
+        "aes-256-ctr",
+    }
+)
 _KNOWN = frozenset(
     {
         "socks5",
@@ -66,6 +83,8 @@ def serialize_uri(server: Server) -> str:
     if isinstance(server, HttpProxyServer):
         scheme = "https" if server.use_tls else "http"
         return _simple_uri(scheme, server)
+    if isinstance(server, ShadowsocksServer):
+        return _serialize_ss(server)
     raise TypeError(f"serialization not implemented for {type(server).__name__}")
 
 
@@ -76,6 +95,8 @@ def _parse(text: str) -> Server:
     scheme = raw.split("://", 1)[0].lower()
     if scheme not in _KNOWN:
         raise ParseError("unsupported_scheme", f"unsupported scheme: {scheme}", scheme=scheme)
+    if scheme == "ss":
+        return _parse_ss(raw)
     if scheme not in _SIMPLE:
         raise ParseError(
             "not_implemented",
@@ -122,6 +143,92 @@ def _parse(text: str) -> Server:
         tls=TlsParams(sni=host) if scheme == "https" else None,
         extra=extra,
     )
+
+
+def _parse_ss(raw: str) -> ShadowsocksServer:
+    rest = raw.split("://", 1)[1]
+    rest, _, fragment = rest.partition("#")
+    rest, _, query = rest.partition("?")
+    if "@" in rest:
+        userinfo, hostport = rest.rsplit("@", 1)
+        method, password = _ss_userinfo(_b64_text(unquote(userinfo)))
+        host, port = _hostport(hostport)
+    else:
+        decoded = _b64_text(unquote(rest))
+        if "@" not in decoded:
+            raise ParseError("missing_field", "legacy ss has no host", scheme="ss", field="host")
+        userinfo, hostport = decoded.rsplit("@", 1)
+        method, password = _ss_userinfo(userinfo)
+        host, port = _hostport(hostport)
+    if method not in _SS_METHODS:
+        raise ParseError(
+            "unsupported_method",
+            f"unsupported method: {method}",
+            scheme="ss",
+            field=method,
+        )
+    return ShadowsocksServer(
+        host=host,
+        port=port,
+        name=_name(fragment, host, port),
+        method=method,
+        password=password,
+        extra=dict(parse_qsl(query, keep_blank_values=True)),
+    )
+
+
+def _ss_userinfo(text: str) -> tuple[str, str]:
+    if ":" not in text:
+        raise ParseError("missing_field", "ss userinfo has no method", scheme="ss", field="method")
+    method, password = text.split(":", 1)
+    if not method or not password:
+        raise ParseError("missing_field", "empty method or password", scheme="ss", field="method")
+    return method, password
+
+
+def _hostport(text: str) -> tuple[str, int]:
+    if text.startswith("["):
+        host, _, port_text = text[1:].partition("]")
+        port_text = port_text.removeprefix(":")
+    elif ":" in text:
+        host, port_text = text.rsplit(":", 1)
+    else:
+        raise ParseError("missing_field", "missing port", scheme="ss", field="port")
+    host = unquote(host)
+    if not host:
+        raise ParseError("missing_field", "missing host", scheme="ss", field="host")
+    try:
+        port = int(port_text)
+    except ValueError as exc:
+        raise ParseError(
+            "invalid_port",
+            f"invalid port: {port_text}",
+            scheme="ss",
+            field="port",
+        ) from exc
+    if not 1 <= port <= 65535:
+        raise ParseError("invalid_port", f"invalid port: {port}", scheme="ss", field="port")
+    return host, port
+
+
+def _b64_text(value: str) -> str:
+    alphabet = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_+/=")
+    if not value or any(char not in alphabet for char in value):
+        raise ParseError("invalid_base64", "ss payload is not base64", scheme="ss")
+    padded = value + ("=" * (-len(value) % 4))
+    try:
+        return base64.urlsafe_b64decode(padded.encode()).decode()
+    except Exception as exc:
+        raise ParseError("invalid_base64", "ss payload is not base64", scheme="ss") from exc
+
+
+def _serialize_ss(server: ShadowsocksServer) -> str:
+    raw = f"{server.method}:{server.password}".encode()
+    token = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+    host = f"[{server.host}]" if ":" in server.host else server.host
+    query = urlencode(server.extra)
+    fragment = quote(server.name, safe="")
+    return urlunsplit(("ss", f"{token}@{host}:{server.port}", "", query, fragment))
 
 
 def _name(fragment: str, host: str, port: int) -> str:
