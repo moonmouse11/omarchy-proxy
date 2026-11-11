@@ -67,6 +67,22 @@ _KNOWN = frozenset(
 _DEFAULT_PORT = {"socks5": 1080, "socks5h": 1080, "http": 80, "https": 443}
 
 
+ERROR_CODES = frozenset(
+    {
+        "invalid_scheme",
+        "invalid_uri",
+        "invalid_base64",
+        "invalid_json",
+        "invalid_field",
+        "missing_field",
+        "invalid_port",
+        "invalid_uuid",
+        "unsupported_method",
+        "unsupported_scheme",
+    }
+)
+
+
 class ParseError(Exception):
     """Machine-readable parse failure. Also raised internally, then returned."""
 
@@ -85,14 +101,19 @@ class ParseError(Exception):
         self.field = field
 
 
-def parse_uri(text: str) -> Server | ParseError:
+def parse_uri(text: str | bytes) -> Server | ParseError:
     """Parse one share URI. Never raises."""
     try:
-        return _parse(text)
+        if isinstance(text, bytes):
+            text = text.decode("utf-8")
+        result: Server | ParseError = _parse(text)
+    except UnicodeDecodeError:
+        return ParseError("invalid_uri", "input is not utf-8")
     except ParseError as exc:
-        return exc
+        result = exc
     except Exception as exc:
         return ParseError("invalid_uri", str(exc) or "invalid uri")
+    return result
 
 
 def serialize_uri(server: Server) -> str:
@@ -139,11 +160,7 @@ def _parse(text: str) -> Server:
     if scheme == "tuic":
         return _parse_tuic(raw)
     if scheme not in _SIMPLE:
-        raise ParseError(
-            "not_implemented",
-            f"scheme not implemented yet: {scheme}",
-            scheme=scheme,
-        )
+        raise ParseError("invalid_scheme", f"scheme not implemented yet: {scheme}", scheme=scheme)
 
     parts = urlsplit(raw)
     host = parts.hostname
