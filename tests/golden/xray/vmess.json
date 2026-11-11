@@ -1,0 +1,24 @@
+{
+  "protocol": "vmess",
+  "settings": {
+    "vnext": [
+      {
+        "address": "m.example",
+        "port": 443,
+        "users": [
+          {
+            "id": "01234567-89ab-cdef-0123-456789abcdef",
+            "alterId": 0,
+            "security": "auto"
+          }
+        ]
+      }
+    ]
+  },
+  "streamSettings": {
+    "network": "ws",
+    "security": "tls",
+    "wsSettings": {"path": "/vmess", "headers": {"Host": "cdn.example"}},
+    "tlsSettings": {"serverName": "m.example", "fingerprint": "", "alpn": []}
+  }
+}

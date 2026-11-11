@@ -1,0 +1,11 @@
+{
+  "protocol": "trojan",
+  "settings": {
+    "servers": [{"address": "t.example", "port": 443, "password": "trojan-pass"}]
+  },
+  "streamSettings": {
+    "network": "tcp",
+    "security": "tls",
+    "tlsSettings": {"serverName": "t.example", "fingerprint": "chrome", "alpn": ["h2"]}
+  }
+}
