@@ -176,6 +176,23 @@ class Catalog:
         assert found is not None
         return found
 
+    def set_ping(self, identity: str, ms: int | None, at: str | float) -> dict[str, Any]:
+        found: dict[str, Any] | None = None
+
+        def apply(data: dict[str, Any]) -> None:
+            nonlocal found
+            for row in data["servers"]:
+                if row.get("id") == identity:
+                    row["ping_ms"] = ms
+                    row["ping_at"] = at
+                    found = row
+                    return
+            raise CatalogError("not_found", "no server with that id")
+
+        self._mutate(apply)
+        assert found is not None
+        return found
+
     def update_last_used(self, identity: str, *, now: datetime | None = None) -> dict[str, Any]:
         stamp = _iso(now)
         found: dict[str, Any] | None = None

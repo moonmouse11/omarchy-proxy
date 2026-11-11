@@ -10,9 +10,12 @@ Currently wired: ``--version`` and the catalog commands.
 from __future__ import annotations
 
 import argparse
+import time
+from urllib.parse import urlsplit
 
 from omarchy_proxy import __version__
 from omarchy_proxy.catalog import Catalog, CatalogError
+from omarchy_proxy.doctor import doctor_report, status_report
 from omarchy_proxy.output import (
     EXIT_ERROR,
     CliError,
@@ -21,6 +24,7 @@ from omarchy_proxy.output import (
     emit_error,
     emit_ok,
 )
+from omarchy_proxy.ping import is_fresh, measure, ping_many
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -57,6 +61,29 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="Toggle the favorite flag on a server.",
     )
+    commands.add_argument(
+        "--status",
+        action="store_true",
+        help="Show proxy health from the local cache.",
+    )
+    commands.add_argument(
+        "--doctor",
+        action="store_true",
+        help="Report local setup problems.",
+    )
+    commands.add_argument(
+        "--ping",
+        nargs="?",
+        const="",
+        dest="ping_id",
+        metavar="ID",
+        help="Measure TCP latency for one server, or for favorites with --favorites.",
+    )
+    parser.add_argument(
+        "--favorites",
+        action="store_true",
+        help="With --ping, measure favorite servers.",
+    )
     parser.add_argument(
         "--confirm",
         action="store_true",
@@ -88,12 +115,45 @@ def _run(args: argparse.Namespace) -> int:
             return emit_ok(**fields)
         if args.favorite_id is not None:
             return emit_ok(server=catalog.toggle_favorite(args.favorite_id))
+        if args.status:
+            return emit_ok(**status_report())
+        if args.doctor:
+            report = doctor_report()
+            if any(item["code"] == "no_backend" for item in report["issues"]):
+                raise CliError("no_backend", "neither xray nor sing-box is installed", report)
+            return emit_ok(**report)
+        if args.ping_id is not None:
+            return _ping(catalog, args.ping_id, favorites=args.favorites)
     except CatalogError as exc:
         raise CliError(exc.code, exc.message) from exc
     raise CliError(
         code="no_command",
         message="No command given. Try --version, or see --help.",
     )
+
+
+def _ping(catalog: Catalog, identity: str, *, favorites: bool) -> int:
+    rows = catalog.list()
+    if favorites or identity == "":
+        chosen = [row for row in rows if row.get("favorite")]
+    else:
+        chosen = [row for row in rows if row.get("id") == identity]
+        if not chosen:
+            raise CliError("not_found", "no server with that id")
+    now = time.time()
+    results = []
+    pending = []
+    for row in chosen:
+        if is_fresh(row, now):
+            results.append({"id": row["id"], "ping_ms": row.get("ping_ms")})
+            continue
+        parts = urlsplit(str(row["uri"]))
+        pending.append({"id": row["id"], "host": parts.hostname or "", "port": parts.port or 0})
+    measured, _peak = ping_many(pending, measure)
+    for item in measured:
+        catalog.set_ping(str(item["id"]), item["ping_ms"], now)
+        results.append(item)
+    return emit_ok(results=results)
 
 
 def main(argv: list[str] | None = None) -> int:

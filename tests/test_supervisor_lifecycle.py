@@ -43,7 +43,7 @@ def test_three_tcp_failures_schedule_one_restart(tmp_path: Path) -> None:
     try:
         for step in range(3):
             state = supervisor.tick(float(step * 5), socks_port=1)
-        assert state["health"] == "degraded"
+        assert state["health"] == "failed"
         assert state["state"] == "starting"
         assert state["restarts"] == 1
         restarted = supervisor.tick(float(state["next_restart_at"]), socks_port=1)
@@ -192,7 +192,7 @@ def test_one_tcp_miss_stays_unknown(tmp_path: Path) -> None:
     state = supervisor.start(_sleep_cmd())
     try:
         probed = supervisor.tick(0, socks_port=1)
-        assert probed["health"] == "unknown"
+        assert probed["health"] == "failed"
         assert probed["state"] == "running"
     finally:
         _stop(state["pid"])

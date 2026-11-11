@@ -15,10 +15,15 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlsplit
 
-from omarchy_proxy.socks5 import SocksError
-from omarchy_proxy.socks5 import connect as socks_connect
+from omarchy_proxy.health import (
+    DEFAULT_GEO_URL,
+    GeoCache,
+    Health,
+    HealthError,
+    fetch_json,
+    round_trip,
+)
 
 LOG_LIMIT = 1_000_000
 _BACKOFF = (1, 2, 4, 8, 16)
@@ -61,6 +66,8 @@ class Supervisor:
     def __init__(self, directory: Path | None = None, secrets: list[str] | None = None) -> None:
         self.directory = directory or state_dir()
         self.secrets = secrets or []
+        self.health = Health()
+        self.geo = GeoCache()
         self._failures = 0
         self._stopped = False
         self._tcp_failures = 0
@@ -87,6 +94,8 @@ class Supervisor:
             self._last_tcp = None
             self._last_http = None
             self._next_restart_at = None
+            self.health = Health()
+        self.health.state = "starting"
         pid = self._spawn(argv)
         payload: dict[str, Any] = {
             "state": "running",
@@ -119,6 +128,7 @@ class Supervisor:
     def stop(self, grace: float = 3) -> dict[str, Any]:
         """SIGTERM, then SIGKILL. A user stop does not restart."""
         self._stopped = True
+        self.health.mark_stopped()
         current = self._read()
         forced = False
         if current is not None and isinstance(current.get("pid"), int):
@@ -211,12 +221,14 @@ class Supervisor:
     ) -> None:
         if socks_port > 0 and (self._last_tcp is None or now - self._last_tcp >= 5):
             self._last_tcp = now
-            if _tcp_open(socks_port):
+            open_port = _tcp_open(socks_port)
+            self.health.port(open_port, now)
+            current["health"] = self.health.state
+            if open_port:
                 self._tcp_failures = 0
             else:
                 self._tcp_failures += 1
                 if self._tcp_failures >= 3:
-                    current["health"] = "degraded"
                     self._tcp_failures = 0
                     _terminate(int(current["pid"]), 0)
                     self._crashed(current, now)
@@ -224,12 +236,30 @@ class Supervisor:
         if http_url and (self._last_http is None or now - self._last_http >= 60):
             self._last_http = now
             try:
-                status = _http_via_socks(socks_port, http_url)
-            except (OSError, SocksError):
-                current["health"] = "degraded"
+                status = round_trip(socks_port, http_url, timeout=10)
+            except (OSError, HealthError) as exc:
+                code = exc.code if isinstance(exc, HealthError) else "socks_error"
+                self.health.round_trip_result(False, code)
             else:
-                if 200 <= status < 300:
-                    current["health"] = "ok"
+                ok = 200 <= status < 300
+                self.health.round_trip_result(ok, None if ok else "http_status")
+                if ok:
+                    self._record_geo(socks_port, now)
+            current["health"] = self.health.state
+            if self.health.last_error:
+                current["health_error"] = self.health.last_error
+            else:
+                current.pop("health_error", None)
+
+    def _record_geo(self, socks_port: int, now: float) -> None:
+        payload = self.geo.lookup(
+            now,
+            lambda: fetch_json(socks_port, DEFAULT_GEO_URL, timeout=10),
+        )
+        if payload:
+            from omarchy_proxy.doctor import write_geo
+
+            write_geo(self.directory, payload)
 
     def _read(self) -> dict[str, Any] | None:
         path = self.directory / "current.json"
@@ -302,20 +332,6 @@ def _tcp_open(port: int) -> bool:
             return True
     except OSError:
         return False
-
-
-def _http_via_socks(port: int, url: str) -> int:
-    parts = urlsplit(url)
-    host = parts.hostname or ""
-    remote_port = parts.port or 80
-    sock = socks_connect("127.0.0.1", port, host, remote_port, timeout=2)
-    try:
-        path = parts.path or "/"
-        sock.sendall(f"GET {path} HTTP/1.0\r\nHost: {host}\r\n\r\n".encode())
-        reply = sock.recv(64).decode(errors="replace")
-    finally:
-        sock.close()
-    return int(reply.split()[1])
 
 
 def _terminate(pid: int, grace: float) -> bool:
