@@ -8,6 +8,7 @@ Other supported schemes return ``not_implemented``.
 from __future__ import annotations
 
 import base64
+import json
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 from omarchy_proxy.model import (
@@ -24,6 +25,7 @@ from omarchy_proxy.model import (
     TlsParams,
     TransportParams,
     VlessServer,
+    VmessServer,
     WsTransport,
 )
 
@@ -102,6 +104,8 @@ def serialize_uri(server: Server) -> str:
         return _serialize_ss(server)
     if isinstance(server, VlessServer):
         return _serialize_vless(server)
+    if isinstance(server, VmessServer):
+        return _serialize_vmess(server)
     raise TypeError(f"serialization not implemented for {type(server).__name__}")
 
 
@@ -116,6 +120,8 @@ def _parse(text: str) -> Server:
         return _parse_ss(raw)
     if scheme == "vless":
         return _parse_vless(raw)
+    if scheme == "vmess":
+        return _parse_vmess(raw)
     if scheme not in _SIMPLE:
         raise ParseError(
             "not_implemented",
@@ -407,15 +413,138 @@ def _hostport(text: str) -> tuple[str, int]:
     return host, port
 
 
-def _b64_text(value: str) -> str:
+def _b64_text(value: str, scheme: str = "ss") -> str:
     alphabet = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_+/=")
     if not value or any(char not in alphabet for char in value):
-        raise ParseError("invalid_base64", "ss payload is not base64", scheme="ss")
+        raise ParseError("invalid_base64", f"{scheme} payload is not base64", scheme=scheme)
     padded = value + ("=" * (-len(value) % 4))
     try:
         return base64.urlsafe_b64decode(padded.encode()).decode()
     except Exception as exc:
-        raise ParseError("invalid_base64", "ss payload is not base64", scheme="ss") from exc
+        raise ParseError(
+            "invalid_base64",
+            f"{scheme} payload is not base64",
+            scheme=scheme,
+        ) from exc
+
+
+_VMESS_KNOWN = frozenset(
+    {"v", "ps", "add", "port", "id", "aid", "net", "type", "host", "path", "tls", "sni", "scy"}
+)
+
+
+def _parse_vmess(raw: str) -> VmessServer:
+    body, _, fragment = raw.split("://", 1)[1].partition("#")
+    payload = unquote(body.strip())
+    try:
+        data = json.loads(_b64_text(payload, "vmess"))
+    except json.JSONDecodeError as exc:
+        raise ParseError("invalid_json", "vmess payload is not JSON", scheme="vmess") from exc
+    if not isinstance(data, dict):
+        raise ParseError("invalid_json", "vmess payload is not a JSON object", scheme="vmess")
+    host = str(data.get("add") or "")
+    if not host:
+        raise ParseError("missing_field", "missing add", scheme="vmess", field="add")
+    uuid = str(data.get("id") or "")
+    if not uuid:
+        raise ParseError("missing_field", "missing id", scheme="vmess", field="id")
+    if not _uuid_ok(uuid):
+        raise ParseError("invalid_uuid", f"invalid uuid: {uuid}", scheme="vmess", field="id")
+    if "port" not in data or data["port"] in ("", None):
+        raise ParseError("missing_field", "missing port", scheme="vmess", field="port")
+    try:
+        port = int(data["port"])
+    except (TypeError, ValueError) as exc:
+        raise ParseError("invalid_port", "invalid port", scheme="vmess", field="port") from exc
+    if not 1 <= port <= 65535:
+        raise ParseError("invalid_port", f"invalid port: {port}", scheme="vmess", field="port")
+    aid = data.get("aid", 0)
+    try:
+        alter_id = int(aid)
+    except (TypeError, ValueError) as exc:
+        raise ParseError("invalid_field", "invalid aid", scheme="vmess", field="aid") from exc
+    net = str(data.get("net") or "tcp")
+    header = str(data.get("type") or "")
+    path = str(data.get("path") or "")
+    header_host = str(data.get("host") or "") or None
+    transport = _vmess_transport(net, header, path, header_host)
+    tls = None
+    if str(data.get("tls") or "") == "tls":
+        sni = str(data.get("sni") or "").strip()
+        tls = TlsParams(sni=sni or None)
+    ps = str(data.get("ps") or "").strip()
+    name = _name(fragment, host, port) if fragment else (ps or _name("", host, port))
+    extra = {key: _json_text(value) for key, value in data.items() if key not in _VMESS_KNOWN}
+    if net not in {"tcp", "ws", "grpc", "h2", "quic", "httpupgrade"}:
+        extra["net"] = net
+    if header and not isinstance(transport, GrpcTransport):
+        extra["type"] = header
+    framed = (WsTransport, H2Transport, HttpUpgradeTransport, GrpcTransport)
+    if path and not isinstance(transport, framed):
+        extra["path"] = path
+    if header_host and not isinstance(transport, (WsTransport, H2Transport, HttpUpgradeTransport)):
+        extra["host"] = header_host
+    if "v" in data:
+        extra["v"] = _json_text(data["v"])
+    return VmessServer(
+        host=host,
+        port=port,
+        name=name,
+        uuid=uuid,
+        alter_id=alter_id,
+        security=str(data.get("scy") or "auto"),
+        transport=transport,
+        tls=tls,
+        extra=extra,
+    )
+
+
+def _vmess_transport(net: str, header: str, path: str, header_host: str | None) -> TransportParams:
+    if net == "ws":
+        return WsTransport(path=path or "/", host=header_host)
+    if net == "h2":
+        return H2Transport(path=path or "/", host=header_host)
+    if net == "httpupgrade":
+        return HttpUpgradeTransport(path=path or "/", host=header_host)
+    if net == "grpc":
+        return GrpcTransport(service_name=path, mode=header or "gun")
+    if net == "quic":
+        return QuicTransport()
+    return TcpTransport()
+
+
+def _json_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _serialize_vmess(server: VmessServer) -> str:
+    transport = server.transport
+    body: dict[str, object] = {
+        "ps": server.name,
+        "add": server.host,
+        "port": str(server.port),
+        "id": server.uuid,
+        "aid": str(server.alter_id),
+        "scy": server.security,
+        "net": transport.kind.value,
+    }
+    if isinstance(transport, (WsTransport, H2Transport, HttpUpgradeTransport)):
+        body["path"] = transport.path
+        body["host"] = transport.host or ""
+    if isinstance(transport, GrpcTransport):
+        body["path"] = transport.service_name
+        body["type"] = transport.mode
+    body["tls"] = "tls" if server.tls is not None else ""
+    if server.tls is not None and server.tls.sni:
+        body["sni"] = server.tls.sni
+    for key, value in server.extra.items():
+        if key not in body:
+            body[key] = value
+    text = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+    token = base64.urlsafe_b64encode(text.encode())
+    return "vmess://" + token.decode().rstrip("=")
 
 
 def _serialize_ss(server: ShadowsocksServer) -> str:
