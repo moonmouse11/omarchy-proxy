@@ -10,6 +10,7 @@ Currently wired: ``--version`` and the catalog commands.
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from urllib.parse import urlsplit
 
@@ -25,6 +26,7 @@ from omarchy_proxy.output import (
     emit_ok,
 )
 from omarchy_proxy.ping import is_fresh, measure, ping_many
+from omarchy_proxy.sysproxy import HTTP_PORT, SOCKS_PORT, env_snippet, proxychains_conf
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -72,6 +74,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Report local setup problems.",
     )
     commands.add_argument(
+        "--env-snippet",
+        action="store_true",
+        help="Print shell exports for the local proxy.",
+    )
+    commands.add_argument(
+        "--proxychains-conf",
+        action="store_true",
+        help="Print a proxychains.conf for the local SOCKS port.",
+    )
+    commands.add_argument(
         "--ping",
         nargs="?",
         const="",
@@ -101,6 +113,12 @@ def _build_parser() -> argparse.ArgumentParser:
 def _run(args: argparse.Namespace) -> int:
     if args.version:
         return emit_ok(version=__version__)
+    if args.env_snippet:
+        sys.stdout.write(env_snippet(SOCKS_PORT, HTTP_PORT))
+        return 0
+    if args.proxychains_conf:
+        sys.stdout.write(proxychains_conf(SOCKS_PORT))
+        return 0
     catalog = Catalog()
     try:
         if args.servers:

@@ -34,6 +34,12 @@ def status_report(directory: Path | None = None) -> dict[str, Any]:
         report["exit_ip"] = geo["query"]
         if isinstance(geo.get("country"), str):
             report["country"] = geo["country"]
+    exposure = _read_json(root / "exposure.json")
+    report["system_mode"] = "none"
+    report["requires_relogin"] = False
+    if exposure and isinstance(exposure.get("system_mode"), str):
+        report["system_mode"] = exposure["system_mode"]
+        report["requires_relogin"] = bool(exposure.get("requires_relogin"))
     return report
 
 
