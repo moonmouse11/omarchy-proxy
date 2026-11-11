@@ -26,6 +26,7 @@ from omarchy_proxy.output import (
     emit_ok,
 )
 from omarchy_proxy.ping import is_fresh, measure, ping_many
+from omarchy_proxy.subscriptions import SubscriptionError, refresh
 from omarchy_proxy.sysproxy import HTTP_PORT, SOCKS_PORT, env_snippet, proxychains_conf
 
 
@@ -84,6 +85,24 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print a proxychains.conf for the local SOCKS port.",
     )
     commands.add_argument(
+        "--auto-refresh",
+        metavar="URL",
+        help="Turn on auto-refresh for one saved subscription.",
+    )
+    commands.add_argument(
+        "--subscribe",
+        metavar="URL",
+        help="Remember a subscription URL without fetching it.",
+    )
+    commands.add_argument(
+        "--refresh",
+        nargs="?",
+        const="",
+        dest="refresh_url",
+        metavar="URL",
+        help="Fetch one subscription, or every saved subscription when URL is omitted.",
+    )
+    commands.add_argument(
         "--ping",
         nargs="?",
         const="",
@@ -95,6 +114,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--favorites",
         action="store_true",
         help="With --ping, measure favorite servers.",
+    )
+    parser.add_argument(
+        "--clear-tombstones",
+        action="store_true",
+        help="With --refresh, allow previously deleted servers to return.",
     )
     parser.add_argument(
         "--confirm",
@@ -142,12 +166,35 @@ def _run(args: argparse.Namespace) -> int:
             return emit_ok(**report)
         if args.ping_id is not None:
             return _ping(catalog, args.ping_id, favorites=args.favorites)
+        if args.subscribe is not None:
+            return emit_ok(subscription=catalog.ensure_subscription(args.subscribe))
+        if args.auto_refresh is not None:
+            return emit_ok(subscription=catalog.set_auto_refresh(args.auto_refresh, True))
+        if args.refresh_url is not None:
+            return _refresh(catalog, args.refresh_url, clear=args.clear_tombstones)
     except CatalogError as exc:
+        raise CliError(exc.code, exc.message) from exc
+    except SubscriptionError as exc:
         raise CliError(exc.code, exc.message) from exc
     raise CliError(
         code="no_command",
         message="No command given. Try --version, or see --help.",
     )
+
+
+def _refresh(catalog: Catalog, url: str, *, clear: bool) -> int:
+    saved = [str(item["url"]) for item in catalog.subscriptions()]
+    targets = [url] if url else saved
+    refreshed = []
+    errors = []
+    for target in targets:
+        try:
+            refreshed.append(refresh(catalog, target, clear_tombstones=clear))
+        except (SubscriptionError, CatalogError) as exc:
+            errors.append({"url": target, "code": exc.code, "message": exc.message})
+    if errors and not refreshed:
+        raise CliError(errors[0]["code"], errors[0]["message"], {"errors": errors})
+    return emit_ok(subscriptions=refreshed, errors=errors)
 
 
 def _ping(catalog: Catalog, identity: str, *, favorites: bool) -> int:

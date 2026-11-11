@@ -370,12 +370,32 @@ def _reap(pid: int) -> int | None:
 def serve(directory: Path) -> None:
     """Keep ticking until the process is killed."""
     supervisor = Supervisor(directory)
+    queue_saved_subscriptions()
     while True:
         current = supervisor._read() or {}
         port = current.get("socks_port")
         socks = port if isinstance(port, int) else 0
         supervisor.tick(time.monotonic(), socks)
         time.sleep(0.2)
+
+
+def queue_saved_subscriptions() -> list[str]:
+    """Queue stale auto-refresh subscriptions once. Failures stay in the catalog."""
+    from omarchy_proxy.catalog import Catalog, CatalogError
+    from omarchy_proxy.subscriptions import SubscriptionError, queue_stale, refresh
+
+    catalog = Catalog()
+
+    def refresh_one(url: str) -> None:
+        try:
+            refresh(catalog, url)
+        except (CatalogError, SubscriptionError):
+            return
+
+    try:
+        return queue_stale(catalog, refresh_one)
+    except CatalogError:
+        return []
 
 
 def main(argv: list[str] | None = None) -> None:

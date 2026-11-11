@@ -11,7 +11,7 @@ import fcntl
 import hashlib
 import json
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -110,20 +110,20 @@ class Catalog:
             row = next((item for item in data["servers"] if item.get("id") == identity), None)
             if row is None:
                 raise CatalogError("not_found", "no server with that id")
-            source = str(row.get("source") or "")
-            subscription = _subscription_url(source)
-            if subscription is not None and not confirm_subscription:
+            urls = _owned_urls(row)
+            if urls and not confirm_subscription:
                 raise CatalogError(
                     "confirm_delete",
                     "deleting a subscription server needs confirmation",
                 )
             data["servers"] = [item for item in data["servers"] if item.get("id") != identity]
-            if subscription is None:
+            if not urls:
                 return
             stones = data.setdefault("tombstones", {})
-            hashes = stones.setdefault(subscription, [])
-            if identity not in hashes:
-                hashes.append(identity)
+            for subscription in urls:
+                hashes = stones.setdefault(subscription, [])
+                if identity not in hashes:
+                    hashes.append(identity)
             warning = "this server returns if tombstones for this subscription are cleared"
 
         self._mutate(apply)
@@ -210,6 +210,122 @@ class Catalog:
         assert found is not None
         return found
 
+    def ensure_subscription(self, url: str) -> dict[str, Any]:
+        found: dict[str, Any] | None = None
+
+        def apply(data: dict[str, Any]) -> None:
+            nonlocal found
+            found = _meta(data, url)
+
+        self._mutate(apply)
+        assert found is not None
+        return found
+
+    def subscriptions(self) -> Sequence[dict[str, Any]]:
+        rows = self.load().get("subscriptions", [])
+        return [row for row in rows if isinstance(row, dict)]
+
+    def note_subscription_error(
+        self, url: str, message: str, *, now: datetime | None = None
+    ) -> None:
+        stamp = _iso(now)
+
+        def apply(data: dict[str, Any]) -> None:
+            meta = _meta(data, url)
+            meta["last_attempt_at"] = stamp
+            meta["last_error"] = message
+
+        self._mutate(apply)
+
+    def set_auto_refresh(self, url: str, enabled: bool) -> dict[str, Any]:
+        found: dict[str, Any] | None = None
+
+        def apply(data: dict[str, Any]) -> None:
+            nonlocal found
+            found = _meta(data, url)
+            found["auto_refresh"] = enabled
+
+        self._mutate(apply)
+        assert found is not None
+        return found
+
+    def apply_subscription(
+        self,
+        url: str,
+        uris: Sequence[str],
+        *,
+        now: datetime | None = None,
+        clear_tombstones: bool = False,
+    ) -> dict[str, Any]:
+        """Replace one subscription's rows. One write, or no write if a URI is invalid."""
+        stamp = _iso(now)
+        parsed = []
+        for text in uris:
+            server = parse_uri(text)
+            if isinstance(server, ParseError):
+                raise CatalogError(server.code, server.message)
+            uri = serialize_uri(server)
+            parsed.append((server_id(uri), server.name, uri))
+        summary: dict[str, Any] = {}
+
+        def apply(data: dict[str, Any]) -> None:
+            if clear_tombstones:
+                data.setdefault("tombstones", {})[url] = []
+            blocked = set(data.get("tombstones", {}).get(url, []))
+            seen = {identity for identity, _name, _uri in parsed}
+            owned = f"subscription:{url}"
+            for identity, name, uri in parsed:
+                if identity in blocked:
+                    continue
+                row = next((item for item in data["servers"] if item.get("id") == identity), None)
+                if row is None:
+                    data["servers"].append(
+                        {
+                            "id": identity,
+                            "name": name,
+                            "uri": uri,
+                            "source": owned,
+                            "subscriptions": [url],
+                            "favorite": False,
+                            "added_at": stamp,
+                            "last_used_at": None,
+                            "ping_ms": None,
+                            "last_seen_at": stamp,
+                        }
+                    )
+                    continue
+                urls = _owned_urls(row)
+                manual = str(row.get("source") or "").startswith("manual")
+                if url not in urls:
+                    urls.append(url)
+                row["subscriptions"] = urls
+                if not manual and urls == [url]:
+                    row["name"] = name
+                    row["uri"] = uri
+                row["last_seen_at"] = stamp
+                row["source"] = _source(manual, urls)
+            kept = []
+            for row in data["servers"]:
+                urls = _owned_urls(row)
+                if url in urls and row.get("id") not in seen:
+                    urls = [item for item in urls if item != url]
+                    manual = str(row.get("source") or "").startswith("manual")
+                    if not urls and not manual:
+                        continue
+                    row["subscriptions"] = urls
+                    row["source"] = _source(manual, urls)
+                kept.append(row)
+            data["servers"] = kept
+            meta = _meta(data, url)
+            meta["last_attempt_at"] = stamp
+            meta["last_fetch_at"] = stamp
+            meta["last_error"] = None
+            meta["entry_count"] = len(parsed)
+            summary.update(meta)
+
+        self._mutate(apply)
+        return summary
+
     def _mutate(self, change: Callable[[dict[str, Any]], None]) -> None:
         with self._lock():
             if self._token is not _UNSET and self._mtime() != self._token:
@@ -280,7 +396,40 @@ def _locked(path: Path) -> Iterator[None]:
 
 
 def _empty() -> dict[str, Any]:
-    return {"version": SCHEMA_VERSION, "servers": [], "tombstones": {}}
+    return {"version": SCHEMA_VERSION, "servers": [], "tombstones": {}, "subscriptions": []}
+
+
+def _meta(data: dict[str, Any], url: str) -> dict[str, Any]:
+    rows = data.setdefault("subscriptions", [])
+    for item in rows:
+        if isinstance(item, dict) and item.get("url") == url:
+            return item
+    created = {
+        "url": url,
+        "last_fetch_at": None,
+        "last_attempt_at": None,
+        "last_error": None,
+        "entry_count": 0,
+        "auto_refresh": False,
+    }
+    rows.append(created)
+    return created
+
+
+def _owned_urls(row: dict[str, Any]) -> list[str]:
+    raw = row.get("subscriptions")
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, str)]
+    one = _subscription_url(str(row.get("source") or ""))
+    return [one] if one else []
+
+
+def _source(manual: bool, urls: list[str]) -> str:
+    if not urls:
+        return "manual"
+    if manual:
+        return f"manual+subscription:{urls[0]}"
+    return f"subscription:{urls[0]}"
 
 
 def _subscription_url(source: str) -> str | None:

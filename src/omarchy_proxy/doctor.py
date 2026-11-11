@@ -19,7 +19,9 @@ _HINTS = {
 _PORTS = (10808, 10809)
 
 
-def status_report(directory: Path | None = None) -> dict[str, Any]:
+def status_report(
+    directory: Path | None = None, catalog_path: Path | None = None
+) -> dict[str, Any]:
     """Assemble --status from files already on disk."""
     root = directory or state_dir()
     current = _read_json(root / "current.json")
@@ -40,6 +42,8 @@ def status_report(directory: Path | None = None) -> dict[str, Any]:
     if exposure and isinstance(exposure.get("system_mode"), str):
         report["system_mode"] = exposure["system_mode"]
         report["requires_relogin"] = bool(exposure.get("requires_relogin"))
+    catalog = _read_json(catalog_path or default_path())
+    report["subscriptions"] = _subscription_status(catalog)
     return report
 
 
@@ -79,6 +83,27 @@ def doctor_report(
         "log": _tail(root / "core.log", secrets or []),
         "issues": issues,
     }
+
+
+def _subscription_status(catalog: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if catalog is None:
+        return []
+    rows = catalog.get("subscriptions")
+    if not isinstance(rows, list):
+        return []
+    visible = []
+    for item in rows:
+        if not isinstance(item, dict) or not isinstance(item.get("url"), str):
+            continue
+        visible.append(
+            {
+                "url": item["url"],
+                "last_fetch_at": item.get("last_fetch_at"),
+                "last_error": item.get("last_error"),
+                "entry_count": item.get("entry_count", 0),
+            }
+        )
+    return visible
 
 
 def _which(name: str) -> str | None:
