@@ -80,6 +80,35 @@ def test_remove_and_missing(tmp_path: Path) -> None:
     assert exc.value.code == "not_found"
 
 
+def test_active_server_cannot_be_deleted(tmp_path: Path) -> None:
+    catalog = Catalog(tmp_path / "servers.json")
+    added = catalog.add("socks5://10.0.0.8:1#Live")
+    with pytest.raises(CatalogError) as exc:
+        catalog.remove(added["id"], active_id=added["id"])
+    assert exc.value.code == "active_server"
+    assert catalog.get(added["id"])["name"] == "Live"
+
+
+def test_subscription_delete_is_tombstoned(tmp_path: Path) -> None:
+    path = tmp_path / "servers.json"
+    catalog = Catalog(path)
+    added = catalog.add("socks5://10.0.0.9:1#Sub", source="subscription:https://feeds.example/list")
+    with pytest.raises(CatalogError) as exc:
+        catalog.remove(added["id"])
+    assert exc.value.code == "confirm_delete"
+    assert catalog.get(added["id"])["id"] == added["id"]
+    warning = catalog.remove(added["id"], confirm_subscription=True)
+    assert warning is not None
+    both = catalog.add(
+        "socks5://10.0.0.10:1#Both",
+        source="manual+subscription:https://feeds.example/list",
+    )
+    catalog.remove(both["id"], confirm_subscription=True)
+    assert catalog.list() == []
+    stored = Catalog(path).load()["tombstones"]
+    assert stored == {"https://feeds.example/list": [added["id"], both["id"]]}
+
+
 def test_bad_uri_is_rejected(tmp_path: Path) -> None:
     catalog = Catalog(tmp_path / "servers.json")
     with pytest.raises(CatalogError) as exc:

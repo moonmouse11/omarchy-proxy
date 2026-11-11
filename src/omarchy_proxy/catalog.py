@@ -97,14 +97,37 @@ class Catalog:
         assert found is not None
         return found
 
-    def remove(self, identity: str) -> None:
+    def remove(
+        self, identity: str, *, active_id: str | None = None, confirm_subscription: bool = False
+    ) -> str | None:
+        """Drop one server. Returns a warning when a subscription tombstone was written."""
+        if active_id is not None and identity == active_id:
+            raise CatalogError("active_server", "disconnect before deleting the active server")
+        warning: str | None = None
+
         def apply(data: dict[str, Any]) -> None:
-            kept = [row for row in data["servers"] if row.get("id") != identity]
-            if len(kept) == len(data["servers"]):
+            nonlocal warning
+            row = next((item for item in data["servers"] if item.get("id") == identity), None)
+            if row is None:
                 raise CatalogError("not_found", "no server with that id")
-            data["servers"] = kept
+            source = str(row.get("source") or "")
+            subscription = _subscription_url(source)
+            if subscription is not None and not confirm_subscription:
+                raise CatalogError(
+                    "confirm_delete",
+                    "deleting a subscription server needs confirmation",
+                )
+            data["servers"] = [item for item in data["servers"] if item.get("id") != identity]
+            if subscription is None:
+                return
+            stones = data.setdefault("tombstones", {})
+            hashes = stones.setdefault(subscription, [])
+            if identity not in hashes:
+                hashes.append(identity)
+            warning = "this server returns if tombstones for this subscription are cleared"
 
         self._mutate(apply)
+        return warning
 
     def get(self, identity: str) -> dict[str, Any]:
         for row in self.load()["servers"]:
@@ -240,7 +263,15 @@ def _locked(path: Path) -> Iterator[None]:
 
 
 def _empty() -> dict[str, Any]:
-    return {"version": SCHEMA_VERSION, "servers": []}
+    return {"version": SCHEMA_VERSION, "servers": [], "tombstones": {}}
+
+
+def _subscription_url(source: str) -> str | None:
+    for prefix in ("manual+subscription:", "subscription:"):
+        if source.startswith(prefix):
+            url = source.removeprefix(prefix)
+            return url or None
+    return None
 
 
 def server_id(uri: str) -> str:
