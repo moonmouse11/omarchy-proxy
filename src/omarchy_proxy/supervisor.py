@@ -17,6 +17,9 @@ from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit
 
+from omarchy_proxy.socks5 import SocksError
+from omarchy_proxy.socks5 import connect as socks_connect
+
 LOG_LIMIT = 1_000_000
 _BACKOFF = (1, 2, 4, 8, 16)
 _MAX_FAILURES = 5
@@ -222,7 +225,7 @@ class Supervisor:
             self._last_http = now
             try:
                 status = _http_via_socks(socks_port, http_url)
-            except OSError:
+            except (OSError, SocksError):
                 current["health"] = "degraded"
             else:
                 if 200 <= status < 300:
@@ -305,36 +308,14 @@ def _http_via_socks(port: int, url: str) -> int:
     parts = urlsplit(url)
     host = parts.hostname or ""
     remote_port = parts.port or 80
-    with socket.create_connection(("127.0.0.1", port), 2) as sock:
-        sock.sendall(b"\x05\x01\x00")
-        if sock.recv(2) != b"\x05\x00":
-            raise OSError("socks handshake failed")
-        address = host.encode()
-        request = b"\x05\x01\x00\x03" + bytes([len(address)]) + address
-        sock.sendall(request + remote_port.to_bytes(2, "big"))
-        head = _recv(sock, 4)
-        if head[1] != 0:
-            raise OSError("socks connect failed")
-        if head[3] == 1:
-            _recv(sock, 6)
-        elif head[3] == 4:
-            _recv(sock, 18)
-        elif head[3] == 3:
-            _recv(sock, _recv(sock, 1)[0] + 2)
+    sock = socks_connect("127.0.0.1", port, host, remote_port, timeout=2)
+    try:
         path = parts.path or "/"
         sock.sendall(f"GET {path} HTTP/1.0\r\nHost: {host}\r\n\r\n".encode())
         reply = sock.recv(64).decode(errors="replace")
+    finally:
+        sock.close()
     return int(reply.split()[1])
-
-
-def _recv(sock: socket.socket, count: int) -> bytes:
-    chunks = bytearray()
-    while len(chunks) < count:
-        piece = sock.recv(count - len(chunks))
-        if not piece:
-            raise OSError("short socks reply")
-        chunks += piece
-    return bytes(chunks)
 
 
 def _terminate(pid: int, grace: float) -> bool:
