@@ -44,9 +44,7 @@ def test_settings_reject_unknown_and_invalid_values(tmp_path: Path) -> None:
     assert bad.value.code == "invalid_field"
 
 
-def test_import_file_uri_and_subscription(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_import_file_uri_and_subscription(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     uri_file = tmp_path / "uris.txt"
     uri_file.write_text("# c\nsocks5://10.0.0.1:1080\nsocks5://10.0.0.2:1080\n", encoding="utf-8")

@@ -133,9 +133,7 @@ def refresh(
     catalog.ensure_subscription(url)
     try:
         uris = parse_document(fetcher(url))
-        return catalog.apply_subscription(
-            url, uris, now=now, clear_tombstones=clear_tombstones
-        )
+        return catalog.apply_subscription(url, uris, now=now, clear_tombstones=clear_tombstones)
     except (SubscriptionError, CatalogError) as exc:
         catalog.note_subscription_error(url, exc.message, now=now)
         raise
