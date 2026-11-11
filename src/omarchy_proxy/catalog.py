@@ -8,14 +8,21 @@ The file mode is ``0600``. A broader mode is tightened on load.
 from __future__ import annotations
 
 import fcntl
+import hashlib
 import json
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, contextmanager
+from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+
+from omarchy_proxy.uri import ParseError, parse_uri, serialize_uri
 
 SCHEMA_VERSION = 1
+_ID_NAME = "id"
 _UNSET = object()
 
 
@@ -50,9 +57,125 @@ class Catalog:
     def save(self, data: dict[str, Any]) -> None:
         if data.get("version") != SCHEMA_VERSION or not isinstance(data.get("servers"), list):
             raise CatalogError("invalid_catalog", "refusing to save a catalog with the wrong shape")
+        self._mutate(lambda current: current.update(data))
+
+    def add(
+        self, text: str, *, source: str = "manual", now: datetime | None = None
+    ) -> dict[str, Any]:
+        """Insert a URI, or refresh the existing row when the identity matches."""
+        server = parse_uri(text)
+        if isinstance(server, ParseError):
+            raise CatalogError(server.code, server.message)
+        uri = serialize_uri(server)
+        identity = server_id(uri)
+        stamp = _iso(now)
+        found: dict[str, Any] | None = None
+
+        def apply(data: dict[str, Any]) -> None:
+            nonlocal found
+            for row in data["servers"]:
+                if row.get("id") == identity:
+                    row["name"] = server.name
+                    row["uri"] = uri
+                    row["last_seen_at"] = stamp
+                    found = row
+                    return
+            found = {
+                "id": identity,
+                "name": server.name,
+                "uri": uri,
+                "source": source,
+                "favorite": False,
+                "added_at": stamp,
+                "last_used_at": None,
+                "ping_ms": None,
+                "last_seen_at": stamp,
+            }
+            data["servers"].append(found)
+
+        self._mutate(apply)
+        assert found is not None
+        return found
+
+    def remove(self, identity: str) -> None:
+        def apply(data: dict[str, Any]) -> None:
+            kept = [row for row in data["servers"] if row.get("id") != identity]
+            if len(kept) == len(data["servers"]):
+                raise CatalogError("not_found", "no server with that id")
+            data["servers"] = kept
+
+        self._mutate(apply)
+
+    def get(self, identity: str) -> dict[str, Any]:
+        for row in self.load()["servers"]:
+            if isinstance(row, dict) and row.get("id") == identity:
+                return row
+        raise CatalogError("not_found", "no server with that id")
+
+    def list(self) -> list[dict[str, Any]]:
+        rows = list(self.load()["servers"])
+        rows.sort(key=_order)
+        return rows
+
+    def rename(self, identity: str, name: str) -> dict[str, Any]:
+        cleaned = name.strip()
+        if not cleaned:
+            raise CatalogError("missing_field", "name is empty")
+        found: dict[str, Any] | None = None
+
+        def apply(data: dict[str, Any]) -> None:
+            nonlocal found
+            for row in data["servers"]:
+                if row.get("id") == identity:
+                    row["name"] = cleaned
+                    row["uri"] = _uri_named(str(row["uri"]), cleaned)
+                    found = row
+                    return
+            raise CatalogError("not_found", "no server with that id")
+
+        self._mutate(apply)
+        assert found is not None
+        return found
+
+    def toggle_favorite(self, identity: str) -> dict[str, Any]:
+        found: dict[str, Any] | None = None
+
+        def apply(data: dict[str, Any]) -> None:
+            nonlocal found
+            for row in data["servers"]:
+                if row.get("id") == identity:
+                    row["favorite"] = not bool(row.get("favorite"))
+                    found = row
+                    return
+            raise CatalogError("not_found", "no server with that id")
+
+        self._mutate(apply)
+        assert found is not None
+        return found
+
+    def update_last_used(self, identity: str, *, now: datetime | None = None) -> dict[str, Any]:
+        stamp = _iso(now)
+        found: dict[str, Any] | None = None
+
+        def apply(data: dict[str, Any]) -> None:
+            nonlocal found
+            for row in data["servers"]:
+                if row.get("id") == identity:
+                    row["last_used_at"] = stamp
+                    found = row
+                    return
+            raise CatalogError("not_found", "no server with that id")
+
+        self._mutate(apply)
+        assert found is not None
+        return found
+
+    def _mutate(self, change: Callable[[dict[str, Any]], None]) -> None:
         with self._lock():
             if self._token is not _UNSET and self._mtime() != self._token:
                 raise CatalogError("catalog_locked", "catalog changed since it was read")
+            data = self._read()
+            change(data)
             self._write(data)
             self._token = self._mtime()
 
@@ -118,3 +241,44 @@ def _locked(path: Path) -> Iterator[None]:
 
 def _empty() -> dict[str, Any]:
     return {"version": SCHEMA_VERSION, "servers": []}
+
+
+def server_id(uri: str) -> str:
+    """Short hash of the canonical URI with the display name ignored."""
+    server = parse_uri(uri)
+    if isinstance(server, ParseError):
+        base = urlsplit(uri)._replace(fragment="").geturl()
+    else:
+        base = serialize_uri(replace(server, name=_ID_NAME))
+    return hashlib.sha256(base.encode()).hexdigest()[:16]
+
+
+def _uri_named(uri: str, name: str) -> str:
+    server = parse_uri(uri)
+    if isinstance(server, ParseError):
+        raise CatalogError(server.code, server.message)
+    return serialize_uri(replace(server, name=name))
+
+
+def _iso(now: datetime | None) -> str:
+    moment = now or datetime.now(UTC)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return moment.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _order(row: dict[str, Any]) -> tuple[int, int, str, str]:
+    used = row.get("last_used_at")
+    recent = used if isinstance(used, str) else ""
+    name = row.get("name")
+    return (
+        0 if row.get("favorite") else 1,
+        0 if recent else 1,
+        "" if not recent else _invert(recent),
+        name if isinstance(name, str) else "",
+    )
+
+
+def _invert(stamp: str) -> str:
+    """Lexicographic reverse of an ISO-8601 UTC stamp."""
+    return "".join(chr(ord("9") - ord(char)) if char.isdigit() else char for char in stamp)
