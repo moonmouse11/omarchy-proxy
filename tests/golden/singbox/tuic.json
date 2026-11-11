@@ -1,0 +1,12 @@
+{
+  "server": "tuic.example",
+  "server_port": 443,
+  "type": "tuic",
+  "uuid": "01234567-89ab-cdef-0123-456789abcdef",
+  "password": "tuic-pass",
+  "congestion_control": "bbr",
+  "tls": {
+    "enabled": true,
+    "server_name": "tuic.example"
+  }
+}

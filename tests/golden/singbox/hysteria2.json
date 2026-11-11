@@ -1,0 +1,14 @@
+{
+  "server": "hy.example",
+  "server_port": 443,
+  "type": "hysteria2",
+  "password": "hy-pass",
+  "obfs": {
+    "type": "salamander",
+    "password": "obfs"
+  },
+  "tls": {
+    "enabled": true,
+    "server_name": "hy.example"
+  }
+}

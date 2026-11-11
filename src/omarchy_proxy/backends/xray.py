@@ -9,7 +9,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from omarchy_proxy.backends.base import BackendSettings
+from omarchy_proxy.backends.base import BackendError, BackendSettings
+
+__all__ = ["BackendError", "XrayBackend"]
 from omarchy_proxy.model import (
     GrpcTransport,
     H2Transport,
@@ -29,15 +31,6 @@ from omarchy_proxy.model import (
 
 MIN_VERSION = (1, 8, 0)
 _VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
-
-
-class BackendError(Exception):
-    """The selected core cannot be used."""
-
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(message)
-        self.code = code
-        self.message = message
 
 
 class XrayBackend:

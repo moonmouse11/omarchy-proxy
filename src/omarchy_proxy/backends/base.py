@@ -12,6 +12,15 @@ from typing import Any, Protocol, TypedDict, runtime_checkable
 from omarchy_proxy.model import Server
 
 
+class BackendError(Exception):
+    """The selected core cannot be used."""
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 class BackendSettings(TypedDict):
     """The few runtime values a generated config needs."""
 

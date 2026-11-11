@@ -1,0 +1,19 @@
+{
+  "server": "m.example",
+  "server_port": 443,
+  "type": "vmess",
+  "uuid": "01234567-89ab-cdef-0123-456789abcdef",
+  "alter_id": 0,
+  "security": "auto",
+  "transport": {
+    "type": "ws",
+    "path": "/vmess",
+    "headers": {
+      "Host": "cdn.example"
+    }
+  },
+  "tls": {
+    "enabled": true,
+    "server_name": "m.example"
+  }
+}

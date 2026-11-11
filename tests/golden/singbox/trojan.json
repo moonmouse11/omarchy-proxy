@@ -1,0 +1,13 @@
+{
+  "server": "t.example",
+  "server_port": 443,
+  "type": "trojan",
+  "password": "trojan-pass",
+  "tls": {
+    "enabled": true,
+    "server_name": "t.example",
+    "alpn": [
+      "h2"
+    ]
+  }
+}
