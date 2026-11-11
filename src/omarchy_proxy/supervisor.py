@@ -393,7 +393,10 @@ def queue_saved_subscriptions() -> list[str]:
             return
 
     try:
-        return queue_stale(catalog, refresh_one)
+        from omarchy_proxy.settings import Settings
+
+        hours = int(Settings().get("refresh_hours"))
+        return queue_stale(catalog, refresh_one, interval=hours * 3600)
     except CatalogError:
         return []
 

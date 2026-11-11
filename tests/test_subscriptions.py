@@ -14,6 +14,7 @@ import pytest
 from omarchy_proxy.catalog import Catalog
 from omarchy_proxy.cli import main
 from omarchy_proxy.doctor import status_report
+from omarchy_proxy.settings import Settings
 from omarchy_proxy.subscriptions import (
     SubscriptionError,
     parse_document,
@@ -127,9 +128,11 @@ def test_supervisor_queues_stale_subscriptions(
 ) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     Catalog().set_auto_refresh("https://example.test/a", True)
+    Settings().set("refresh_hours", "1")
 
-    def fake_queue(catalog: Catalog, _refresh: object) -> list[str]:
+    def fake_queue(catalog: Catalog, _refresh: object, interval: float = 0) -> list[str]:
         assert catalog.subscriptions()[0]["auto_refresh"] is True
+        assert interval == 3600
         return ["https://example.test/a"]
 
     monkeypatch.setattr("omarchy_proxy.subscriptions.queue_stale", fake_queue)

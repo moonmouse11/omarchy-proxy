@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from omarchy_proxy import __version__
 from omarchy_proxy.catalog import Catalog, CatalogError
 from omarchy_proxy.doctor import doctor_report, status_report
+from omarchy_proxy.manager import Manager, ManagerError
 from omarchy_proxy.output import (
     EXIT_ERROR,
     CliError,
@@ -26,7 +27,9 @@ from omarchy_proxy.output import (
     emit_ok,
 )
 from omarchy_proxy.ping import is_fresh, measure, ping_many
+from omarchy_proxy.settings import Settings, SettingsError
 from omarchy_proxy.subscriptions import SubscriptionError, refresh
+from omarchy_proxy.supervisor import state_dir
 from omarchy_proxy.sysproxy import HTTP_PORT, SOCKS_PORT, env_snippet, proxychains_conf
 
 
@@ -50,7 +53,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--import",
         dest="import_uri",
         metavar="URI",
-        help="Add a proxy URI to the catalog.",
+        help="Add a URI, a file of URIs, or a subscription URL.",
+    )
+    commands.add_argument("--connect", metavar="ID", help="Connect to a catalog server.")
+    commands.add_argument(
+        "--disconnect",
+        action="store_true",
+        help="Stop the proxy and revert exposure.",
     )
     commands.add_argument(
         "--remove",
@@ -103,6 +112,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Fetch one subscription, or every saved subscription when URL is omitted.",
     )
     commands.add_argument(
+        "--settings-get",
+        nargs="?",
+        const="",
+        dest="settings_get",
+        metavar="KEY",
+        help="Print one setting, or all settings when KEY is omitted.",
+    )
+    commands.add_argument(
+        "--settings-set",
+        nargs=2,
+        metavar=("KEY", "VALUE"),
+        help="Validate and store one setting.",
+    )
+    commands.add_argument(
         "--ping",
         nargs="?",
         const="",
@@ -148,7 +171,16 @@ def _run(args: argparse.Namespace) -> int:
         if args.servers:
             return emit_ok(servers=catalog.list())
         if args.import_uri is not None:
-            return emit_ok(server=catalog.add(args.import_uri))
+            return _import(catalog, args.import_uri)
+        if args.connect is not None:
+            return _connect(catalog, args.connect)
+        if args.disconnect:
+            return emit_ok(**_manager().disconnect())
+        if args.settings_get is not None:
+            return _settings_get(args.settings_get)
+        if args.settings_set is not None:
+            key, value = args.settings_set
+            return emit_ok(**Settings().set(key, value))
         if args.remove_id is not None:
             warning = catalog.remove(args.remove_id, confirm_subscription=args.confirm)
             fields: dict[str, object] = {"removed": args.remove_id}
@@ -176,10 +208,63 @@ def _run(args: argparse.Namespace) -> int:
         raise CliError(exc.code, exc.message) from exc
     except SubscriptionError as exc:
         raise CliError(exc.code, exc.message) from exc
+    except ManagerError as exc:
+        raise CliError(exc.code, exc.message) from exc
+    except SettingsError as exc:
+        raise CliError(exc.code, exc.message) from exc
     raise CliError(
         code="no_command",
         message="No command given. Try --version, or see --help.",
     )
+
+
+def _manager() -> Manager:
+    root = Catalog().path.parent
+    return Manager(state_dir(), root)
+
+
+def _connect(catalog: Catalog, identity: str) -> int:
+    prefs = Settings().values()
+    steps: list[str] = []
+
+    def progress(step: str) -> None:
+        steps.append(step)
+        emit_ok(progress=step)
+
+    result = _manager().connect(
+        catalog,
+        identity,
+        mode=str(prefs["mode"]),
+        preference=str(prefs["backend"]),
+        socks_port=int(prefs["socks_port"]),
+        http_port=int(prefs["http_port"]),
+        bypass=str(prefs["bypass"]),
+        progress=progress,
+    )
+    return emit_ok(progress="done", steps=steps, **result)
+
+
+def _import(catalog: Catalog, text: str) -> int:
+    from pathlib import Path
+
+    path = Path(text)
+    if path.is_file():
+        added = []
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if line and not line.startswith("#") and not line.startswith("//"):
+                added.append(catalog.add(line))
+        return emit_ok(servers=added)
+    if urlsplit(text).scheme in {"http", "https"}:
+        return emit_ok(subscription=refresh(catalog, text))
+    return emit_ok(server=catalog.add(text))
+
+
+def _settings_get(key: str) -> int:
+    store = Settings()
+    if key == "":
+        return emit_ok(settings=store.values())
+    return emit_ok(key=key, value=store.get(key))
 
 
 def _refresh(catalog: Catalog, url: str, *, clear: bool) -> int:

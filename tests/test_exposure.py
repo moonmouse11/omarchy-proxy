@@ -53,20 +53,20 @@ def test_gsettings_saves_and_restores(tmp_path: Path) -> None:
         return ""
 
     manager = Manager(tmp_path, tmp_path / "config", _exposure(tmp_path, run))
-    applied = manager.connect("system", bypass="localhost,.internal.lan")
+    applied = manager.exposure.connect("system", bypass="localhost,.internal.lan")
     assert applied["system_mode"] == "gsettings"
     sets = [call for call in calls if call[1] == "set"]
     assert ["gsettings", "set", _SCHEMA, "mode", "manual"] in sets
     assert ["gsettings", "set", _SCHEMA, "ignore-hosts", "['localhost', '.internal.lan']"] in sets
     assert ["gsettings", "set", f"{_SCHEMA}.socks", "port", str(SOCKS_PORT)] in sets
     calls.clear()
-    manager.connect("system", socks_port=2000)
+    manager.exposure.connect("system", socks_port=2000)
     assert ["gsettings", "set", f"{_SCHEMA}.socks", "port", "2000"] in calls
     calls.clear()
-    assert manager.disconnect()["active"] is False
+    assert manager.exposure.disconnect()["active"] is False
     restored = [call for call in calls if call[1] == "set"]
     assert ["gsettings", "set", _SCHEMA, "mode", "'old'"] in restored
-    again = manager.disconnect()
+    again = manager.exposure.disconnect()
     assert again["active"] is False
     assert calls == restored
 
@@ -77,7 +77,7 @@ def test_missing_gsettings_writes_environment_d(tmp_path: Path) -> None:
 
     config = tmp_path / "config"
     manager = Manager(tmp_path, config, _exposure(tmp_path, run))
-    applied = manager.connect("system")
+    applied = manager.exposure.connect("system")
     path = config / "environment.d" / "omarchy-proxy.conf"
     text = path.read_text(encoding="utf-8")
     assert "http_proxy=http://127.0.0.1:10809" in text
@@ -91,10 +91,10 @@ def test_missing_gsettings_writes_environment_d(tmp_path: Path) -> None:
     other = config / "environment.d" / "other.conf"
     other.write_text("keep\n", encoding="utf-8")
     path.write_text("hand edited\n", encoding="utf-8")
-    manager.disconnect()
+    manager.exposure.disconnect()
     assert not path.exists()
     assert other.read_text(encoding="utf-8") == "keep\n"
-    manager.disconnect()
+    manager.exposure.disconnect()
 
 
 def test_mode_change_while_connected_reverts_the_old_path(tmp_path: Path) -> None:
@@ -105,13 +105,13 @@ def test_mode_change_while_connected_reverts_the_old_path(tmp_path: Path) -> Non
 
     config = tmp_path / "config"
     manager = Manager(tmp_path, config, _exposure(tmp_path, run))
-    manager.connect("system")
+    manager.exposure.connect("system")
     path = config / "environment.d" / "omarchy-proxy.conf"
     assert path.exists()
-    switched = manager.connect("manual")
+    switched = manager.exposure.connect("manual")
     assert switched["system_mode"] == "none"
     assert not path.exists()
-    manager.connect("env-only")
+    manager.exposure.connect("env-only")
     assert not path.exists()
     stored = json.loads((tmp_path / "exposure.json").read_text(encoding="utf-8"))
     assert stored["mode"] == "env-only"
@@ -121,7 +121,7 @@ def test_mode_change_while_connected_reverts_the_old_path(tmp_path: Path) -> Non
 def test_manual_connect_touches_no_files(tmp_path: Path) -> None:
     config = tmp_path / "config"
     manager = Manager(tmp_path, config, _exposure(tmp_path, lambda _args: ""))
-    manager.connect("manual")
+    manager.exposure.connect("manual")
     assert list(config.glob("**/*")) == []
 
 
