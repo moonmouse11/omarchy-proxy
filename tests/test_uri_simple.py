@@ -81,10 +81,10 @@ def test_unknown_query_round_trips() -> None:
 
 
 def test_known_scheme_without_parser_is_not_unsupported() -> None:
-    err = parse_uri("vless://example")
+    err = parse_uri("vmess://example")
     assert isinstance(err, ParseError)
     assert err.code == "not_implemented"
-    assert err.scheme == "vless"
+    assert err.scheme == "vmess"
 
 
 def test_ipv6_default_name_keeps_brackets() -> None:

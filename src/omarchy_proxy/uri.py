@@ -1,8 +1,8 @@
 """Parse and re-serialize proxy share URIs.
 
 Failures return a :class:`ParseError` and never raise. Implemented schemes:
-``socks5``, ``socks5h``, ``http``, ``https``, and ``ss`` (SIP002 and legacy
-base64). Other supported schemes return ``not_implemented``.
+``socks5``, ``socks5h``, ``http``, ``https``, ``ss``, and ``vless``.
+Other supported schemes return ``not_implemented``.
 """
 
 from __future__ import annotations
@@ -10,7 +10,22 @@ from __future__ import annotations
 import base64
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
-from omarchy_proxy.model import HttpProxyServer, Server, ShadowsocksServer, Socks5Server, TlsParams
+from omarchy_proxy.model import (
+    GrpcTransport,
+    H2Transport,
+    HttpProxyServer,
+    HttpUpgradeTransport,
+    QuicTransport,
+    RealityParams,
+    Server,
+    ShadowsocksServer,
+    Socks5Server,
+    TcpTransport,
+    TlsParams,
+    TransportParams,
+    VlessServer,
+    WsTransport,
+)
 
 _SIMPLE = frozenset({"socks5", "socks5h", "http", "https"})
 _SS_METHODS = frozenset(
@@ -85,6 +100,8 @@ def serialize_uri(server: Server) -> str:
         return _simple_uri(scheme, server)
     if isinstance(server, ShadowsocksServer):
         return _serialize_ss(server)
+    if isinstance(server, VlessServer):
+        return _serialize_vless(server)
     raise TypeError(f"serialization not implemented for {type(server).__name__}")
 
 
@@ -97,6 +114,8 @@ def _parse(text: str) -> Server:
         raise ParseError("unsupported_scheme", f"unsupported scheme: {scheme}", scheme=scheme)
     if scheme == "ss":
         return _parse_ss(raw)
+    if scheme == "vless":
+        return _parse_vless(raw)
     if scheme not in _SIMPLE:
         raise ParseError(
             "not_implemented",
@@ -143,6 +162,183 @@ def _parse(text: str) -> Server:
         tls=TlsParams(sni=host) if scheme == "https" else None,
         extra=extra,
     )
+
+
+_VLESS_KNOWN = frozenset(
+    {
+        "type",
+        "net",
+        "path",
+        "host",
+        "security",
+        "sni",
+        "alpn",
+        "fp",
+        "pbk",
+        "sid",
+        "flow",
+        "serviceName",
+        "mode",
+    }
+)
+
+
+def _parse_vless(raw: str) -> VlessServer:
+    parts = urlsplit(raw)
+    uuid = unquote(parts.username or "")
+    if not uuid:
+        raise ParseError("missing_field", "missing uuid", scheme="vless", field="uuid")
+    if not _uuid_ok(uuid):
+        raise ParseError("invalid_uuid", f"invalid uuid: {uuid}", scheme="vless", field="uuid")
+    host = parts.hostname
+    if not host:
+        raise ParseError("missing_field", "missing host", scheme="vless", field="host")
+    try:
+        raw_port = parts.port
+    except ValueError as exc:
+        raise ParseError("invalid_port", str(exc), scheme="vless", field="port") from exc
+    port = 443 if raw_port is None else raw_port
+    params, extra = _split_query(parts.query, _VLESS_KNOWN)
+    kind = params.get("type") or params.get("net") or "tcp"
+    transport = _vless_transport(params)
+    if kind not in {"tcp", "ws", "grpc", "h2", "quic", "httpupgrade"}:
+        label = "type" if "type" in params else "net"
+        extra = {label: kind, **extra}
+    security = params.get("security", "none")
+    tls = None
+    reality = None
+    if security == "reality":
+        pbk = params.get("pbk", "")
+        if not pbk:
+            raise ParseError("missing_field", "missing pbk", scheme="vless", field="pbk")
+        reality = RealityParams(
+            public_key=pbk,
+            short_id=params.get("sid"),
+            sni=params.get("sni"),
+            fingerprint=params.get("fp"),
+        )
+    elif security == "tls":
+        alpn = tuple(part for part in params.get("alpn", "").split(",") if part)
+        tls = TlsParams(sni=params.get("sni"), alpn=alpn, fingerprint=params.get("fp"))
+    elif security != "none":
+        extra = {"security": security, **extra}
+    flow = params.get("flow") or None
+    extra.update(_unstored_vless(params, transport, security, tls, reality, flow))
+    return VlessServer(
+        host=host,
+        port=port,
+        name=_name(parts.fragment, host, port),
+        uuid=uuid,
+        flow=flow,
+        transport=transport,
+        tls=tls,
+        reality=reality,
+        extra=extra,
+    )
+
+
+def _unstored_vless(
+    params: dict[str, str],
+    transport: TransportParams,
+    security: str,
+    tls: TlsParams | None,
+    reality: RealityParams | None,
+    flow: str | None,
+) -> dict[str, str]:
+    """Known query keys that were not copied onto the server."""
+    used = {"type", "net"}
+    if isinstance(transport, (WsTransport, H2Transport, HttpUpgradeTransport)):
+        used.update({"path", "host"})
+    if isinstance(transport, GrpcTransport):
+        used.update({"serviceName", "mode"})
+    if security in {"none", "tls", "reality"}:
+        used.add("security")
+    if reality is not None:
+        used.update({"pbk", "sid", "sni", "fp"})
+    if tls is not None:
+        used.update({"sni", "alpn", "fp"})
+    if flow:
+        used.add("flow")
+    return {key: value for key, value in params.items() if key not in used and value}
+
+
+def _uuid_ok(value: str) -> bool:
+    hexdigits = set("0123456789abcdefABCDEF")
+    if len(value) == 32:
+        return all(char in hexdigits for char in value)
+    parts = value.split("-")
+    lengths = (8, 4, 4, 4, 12)
+    if len(parts) != 5:
+        return False
+    pairs = zip(parts, lengths, strict=True)
+    return all(len(part) == size and all(c in hexdigits for c in part) for part, size in pairs)
+
+
+def _split_query(query: str, known: frozenset[str]) -> tuple[dict[str, str], dict[str, str]]:
+    params: dict[str, str] = {}
+    extra: dict[str, str] = {}
+    for key, value in parse_qsl(query, keep_blank_values=True):
+        if key in known and key not in params:
+            params[key] = value
+        else:
+            extra[key] = value
+    return params, extra
+
+
+def _vless_transport(params: dict[str, str]) -> TransportParams:
+    kind = params.get("type") or params.get("net") or "tcp"
+    header_host = params.get("host")
+    path = params.get("path") or "/"
+    if kind == "ws":
+        return WsTransport(path=path, host=header_host)
+    if kind == "grpc":
+        service = params.get("serviceName", "")
+        return GrpcTransport(service_name=service, mode=params.get("mode") or "gun")
+    if kind == "h2":
+        return H2Transport(path=path, host=header_host)
+    if kind == "quic":
+        return QuicTransport()
+    if kind == "httpupgrade":
+        return HttpUpgradeTransport(path=path, host=header_host)
+    return TcpTransport()
+
+
+def _serialize_vless(server: VlessServer) -> str:
+    query: list[tuple[str, str]] = []
+    transport = server.transport
+    if not isinstance(transport, TcpTransport):
+        query.append(("type", transport.kind.value))
+    if isinstance(transport, (WsTransport, H2Transport, HttpUpgradeTransport)):
+        query.append(("path", transport.path))
+        if transport.host:
+            query.append(("host", transport.host))
+    if isinstance(transport, GrpcTransport):
+        query.append(("serviceName", transport.service_name))
+        query.append(("mode", transport.mode))
+    if server.reality is not None:
+        query.append(("security", "reality"))
+        query.append(("pbk", server.reality.public_key))
+        if server.reality.short_id:
+            query.append(("sid", server.reality.short_id))
+        if server.reality.sni:
+            query.append(("sni", server.reality.sni))
+        if server.reality.fingerprint:
+            query.append(("fp", server.reality.fingerprint))
+    elif server.tls is not None:
+        query.append(("security", "tls"))
+        if server.tls.sni:
+            query.append(("sni", server.tls.sni))
+        if server.tls.alpn:
+            query.append(("alpn", ",".join(server.tls.alpn)))
+        if server.tls.fingerprint:
+            query.append(("fp", server.tls.fingerprint))
+    if server.flow:
+        query.append(("flow", server.flow))
+    query.extend(server.extra.items())
+    host = f"[{server.host}]" if ":" in server.host else server.host
+    netloc = f"{server.uuid}@{host}:{server.port}"
+    fragment = quote(server.name, safe="")
+    return urlunsplit(("vless", netloc, "", urlencode(query), fragment))
 
 
 def _parse_ss(raw: str) -> ShadowsocksServer:
