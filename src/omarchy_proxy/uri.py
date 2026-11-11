@@ -1,21 +1,22 @@
 """Parse and re-serialize proxy share URIs.
 
 Failures return a :class:`ParseError` and never raise. Implemented schemes:
-``socks5``, ``socks5h``, ``http``, ``https``, ``ss``, and ``vless``.
-Other supported schemes return ``not_implemented``.
+``socks5``, ``socks5h``, ``http``, ``https``, ``ss``, ``vless``, ``vmess``,
+``trojan``, ``hysteria2`` (and ``hy2``), and ``tuic``.
 """
 
 from __future__ import annotations
 
 import base64
 import json
-from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
+from urllib.parse import SplitResult, parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
 from omarchy_proxy.model import (
     GrpcTransport,
     H2Transport,
     HttpProxyServer,
     HttpUpgradeTransport,
+    Hysteria2Server,
     QuicTransport,
     RealityParams,
     Server,
@@ -24,6 +25,8 @@ from omarchy_proxy.model import (
     TcpTransport,
     TlsParams,
     TransportParams,
+    TrojanServer,
+    TuicServer,
     VlessServer,
     VmessServer,
     WsTransport,
@@ -106,6 +109,13 @@ def serialize_uri(server: Server) -> str:
         return _serialize_vless(server)
     if isinstance(server, VmessServer):
         return _serialize_vmess(server)
+    if isinstance(server, TrojanServer):
+        return _serialize_user_uri("trojan", server.password, server)
+    if isinstance(server, Hysteria2Server):
+        return _serialize_user_uri("hysteria2", server.password, server)
+    if isinstance(server, TuicServer):
+        user = f"{server.uuid}:{quote(server.password, safe='')}"
+        return _serialize_user_uri("tuic", user, server, encoded=True)
     raise TypeError(f"serialization not implemented for {type(server).__name__}")
 
 
@@ -122,6 +132,12 @@ def _parse(text: str) -> Server:
         return _parse_vless(raw)
     if scheme == "vmess":
         return _parse_vmess(raw)
+    if scheme == "trojan":
+        return _parse_trojan(raw)
+    if scheme in {"hysteria2", "hy2"}:
+        return _parse_hysteria2(raw)
+    if scheme == "tuic":
+        return _parse_tuic(raw)
     if scheme not in _SIMPLE:
         raise ParseError(
             "not_implemented",
@@ -431,6 +447,154 @@ def _b64_text(value: str, scheme: str = "ss") -> str:
 _VMESS_KNOWN = frozenset(
     {"v", "ps", "add", "port", "id", "aid", "net", "type", "host", "path", "tls", "sni", "scy"}
 )
+
+
+def _parse_trojan(raw: str) -> TrojanServer:
+    parts = urlsplit(raw)
+    password = _userinfo(parts)
+    if not password:
+        raise ParseError("missing_field", "missing password", scheme="trojan", field="password")
+    host, port = _host_port(parts, "trojan", 443)
+    params, extra = _split_query(parts.query, _VLESS_KNOWN)
+    transport = _vless_transport(params)
+    return TrojanServer(
+        host=host,
+        port=port,
+        name=_name(parts.fragment, host, port),
+        password=password,
+        transport=transport,
+        tls=_tls_from_params(params),
+        extra=_with_unstored(params, extra, transport),
+    )
+
+
+def _parse_hysteria2(raw: str) -> Hysteria2Server:
+    parts = urlsplit(raw)
+    password = _userinfo(parts)
+    if not password:
+        raise ParseError("missing_field", "missing password", scheme="hysteria2", field="password")
+    host, port = _host_port(parts, "hysteria2", 443)
+    known = _VLESS_KNOWN | {"obfs-password", "congestion_control", "cc"}
+    params, extra = _split_query(parts.query, known)
+    cc = params.get("congestion_control") or params.get("cc")
+    if params.get("cc") and params.get("congestion_control"):
+        extra["cc"] = params["cc"]
+    return Hysteria2Server(
+        host=host,
+        port=port,
+        name=_name(parts.fragment, host, port),
+        password=password,
+        obfs_password=params.get("obfs-password"),
+        congestion_control=cc,
+        tls=_tls_from_params(params),
+        extra=extra,
+    )
+
+
+def _parse_tuic(raw: str) -> TuicServer:
+    parts = urlsplit(raw)
+    uuid = unquote(parts.username or "")
+    password = unquote(parts.password) if parts.password is not None else ""
+    if not uuid:
+        raise ParseError("missing_field", "missing uuid", scheme="tuic", field="uuid")
+    if not _uuid_ok(uuid):
+        raise ParseError("invalid_uuid", f"invalid uuid: {uuid}", scheme="tuic", field="uuid")
+    if not password:
+        raise ParseError("missing_field", "missing password", scheme="tuic", field="password")
+    host, port = _host_port(parts, "tuic", 443)
+    known = _VLESS_KNOWN | {"congestion_control"}
+    params, extra = _split_query(parts.query, known)
+    return TuicServer(
+        host=host,
+        port=port,
+        name=_name(parts.fragment, host, port),
+        uuid=uuid,
+        password=password,
+        congestion_control=params.get("congestion_control"),
+        tls=_tls_from_params(params),
+        extra=extra,
+    )
+
+
+def _host_port(parts: SplitResult, scheme: str, default: int) -> tuple[str, int]:
+    host = parts.hostname
+    if not host:
+        raise ParseError("missing_field", "missing host", scheme=scheme, field="host")
+    try:
+        raw_port = parts.port
+    except ValueError as exc:
+        raise ParseError("invalid_port", str(exc), scheme=scheme, field="port") from exc
+    port = default if raw_port is None else raw_port
+    if not 1 <= port <= 65535:
+        raise ParseError("invalid_port", f"invalid port: {port}", scheme=scheme, field="port")
+    return host, port
+
+
+def _userinfo(parts: SplitResult) -> str:
+    """Whole userinfo, including colons. ``urlsplit`` stops the username at the first colon."""
+    netloc = parts.netloc
+    at = netloc.rfind("@")
+    if at < 0:
+        return ""
+    return unquote(netloc[:at])
+
+
+def _tls_from_params(params: dict[str, str]) -> TlsParams:
+    alpn = tuple(part for part in params.get("alpn", "").split(",") if part)
+    return TlsParams(sni=params.get("sni") or None, alpn=alpn, fingerprint=params.get("fp") or None)
+
+
+def _with_unstored(
+    params: dict[str, str],
+    extra: dict[str, str],
+    transport: TransportParams,
+) -> dict[str, str]:
+    used = {"type", "net", "sni", "alpn", "fp", "security"}
+    if isinstance(transport, (WsTransport, H2Transport, HttpUpgradeTransport)):
+        used.update({"path", "host"})
+    if isinstance(transport, GrpcTransport):
+        used.update({"serviceName", "mode"})
+    kept = {key: value for key, value in params.items() if key not in used and value}
+    return {**extra, **kept}
+
+
+def _serialize_user_uri(
+    scheme: str,
+    user: str,
+    server: TrojanServer | Hysteria2Server | TuicServer,
+    *,
+    encoded: bool = False,
+) -> str:
+    auth = user if encoded else quote(user, safe="")
+    host = f"[{server.host}]" if ":" in server.host else server.host
+    query: list[tuple[str, str]] = []
+    transport = getattr(server, "transport", None)
+    framed = (WsTransport, H2Transport, HttpUpgradeTransport, GrpcTransport, QuicTransport)
+    if isinstance(transport, framed):
+        query.append(("type", transport.kind.value))
+    if isinstance(transport, (WsTransport, H2Transport, HttpUpgradeTransport)):
+        query.append(("path", transport.path))
+        if transport.host:
+            query.append(("host", transport.host))
+    if isinstance(transport, GrpcTransport):
+        query.append(("serviceName", transport.service_name))
+        query.append(("mode", transport.mode))
+    tls = server.tls
+    if tls.sni:
+        query.append(("sni", tls.sni))
+    if tls.alpn:
+        query.append(("alpn", ",".join(tls.alpn)))
+    if tls.fingerprint:
+        query.append(("fp", tls.fingerprint))
+    obfs = getattr(server, "obfs_password", None)
+    if isinstance(obfs, str):
+        query.append(("obfs-password", obfs))
+    cc = getattr(server, "congestion_control", None)
+    if isinstance(cc, str):
+        query.append(("congestion_control", cc))
+    query.extend(server.extra.items())
+    fragment = quote(server.name, safe="")
+    return urlunsplit((scheme, f"{auth}@{host}:{server.port}", "", urlencode(query), fragment))
 
 
 def _parse_vmess(raw: str) -> VmessServer:

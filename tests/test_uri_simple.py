@@ -80,13 +80,6 @@ def test_unknown_query_round_trips() -> None:
     assert serialize_uri(server) == "http://proxy.example.com:8080?foo=1#Name"
 
 
-def test_known_scheme_without_parser_is_not_unsupported() -> None:
-    err = parse_uri("trojan://example")
-    assert isinstance(err, ParseError)
-    assert err.code == "not_implemented"
-    assert err.scheme == "trojan"
-
-
 def test_ipv6_default_name_keeps_brackets() -> None:
     server = parse_uri("socks5://[::1]:1080")
     assert isinstance(server, Socks5Server)
