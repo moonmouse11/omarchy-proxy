@@ -265,7 +265,10 @@ class Supervisor:
         path = self.directory / "current.json"
         if not path.exists():
             return None
-        data = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return None
         if not isinstance(data, dict):
             return None
         return cast(dict[str, Any], data)

@@ -41,6 +41,18 @@ clean: ## Remove caches and build artifacts
 	rm -rf $(VENV) .pytest_cache .mypy_cache .ruff_cache .coverage htmlcov build dist *.egg-info
 	find . -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true
 
+docker/bin/xray docker/bin/sing-box:
+	mkdir -p docker/bin
+	curl -fsSL -o /tmp/xray.zip https://github.com/XTLS/Xray-core/releases/download/v1.8.24/Xray-linux-64.zip
+	unzip -jo /tmp/xray.zip xray -d docker/bin
+	curl -fsSL -o /tmp/sing-box.tar.gz https://github.com/SagerNet/sing-box/releases/download/v1.10.7/sing-box-1.10.7-linux-amd64.tar.gz
+	tar -C docker/bin --strip-components=1 -xzf /tmp/sing-box.tar.gz sing-box-1.10.7-linux-amd64/sing-box
+	chmod 755 docker/bin/xray docker/bin/sing-box
+
+test-docker: docker/bin/xray docker/bin/sing-box ## Proxied request per protocol inside Docker
+	docker build -t omarchy-proxy-test -f docker/Dockerfile .
+	docker run --rm -v "$(CURDIR)":/src -w /src -e PYTHONPATH=/src/src omarchy-proxy-test
+
 install: ## Install the plugin backend and systemd user unit
 	./install.sh
 

@@ -41,4 +41,5 @@ Thumbs.db
 
 # Project-local state (should never be committed)
 local/
+docker/bin/
 *.local
