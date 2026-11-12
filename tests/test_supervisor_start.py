@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from omarchy_proxy.supervisor import Supervisor, SupervisorError
+from omarchy_proxy.supervisor import Supervisor, SupervisorError, spawn_session
 
 
 def _sleep_cmd() -> list[str]:
@@ -69,3 +69,23 @@ def test_stale_pid_is_replaced_without_killing_a_foreign_process(tmp_path: Path)
             _stop(state["pid"])
     finally:
         _stop(other["pid"])
+
+
+def test_spawn_session_when_setsid_flag_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    real = os.posix_spawn
+
+    def without_setsid(path: str, argv: list[str], env: dict[str, str], **kwargs: object) -> int:
+        if kwargs.get("setsid"):
+            raise NotImplementedError("posix_spawn: setsid unavailable on this platform")
+        return real(path, argv, env, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("omarchy_proxy.supervisor.os.posix_spawn", without_setsid)
+    pid = spawn_session([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and os.getsid(pid) != pid:
+            time.sleep(0.02)
+        assert os.getsid(pid) == pid
+    finally:
+        os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)

@@ -13,7 +13,7 @@ from pathlib import Path
 from omarchy_proxy.catalog import Catalog
 from omarchy_proxy.cli import main
 from omarchy_proxy.doctor import status_report
-from omarchy_proxy.supervisor import Supervisor
+from omarchy_proxy.supervisor import Supervisor, spawn_session
 
 
 def test_thousand_servers_stay_inside_the_status_budget(tmp_path: Path, monkeypatch) -> None:
@@ -68,7 +68,7 @@ def test_corrupt_state_does_not_crash_the_supervisor(tmp_path: Path) -> None:
 
 
 def test_killing_the_core_during_a_health_check_is_a_restart(tmp_path: Path, monkeypatch) -> None:
-    sleep = os.posix_spawn("/bin/sleep", ["/bin/sleep", "30"], os.environ, setsid=True)
+    sleep = spawn_session(["/bin/sleep", "30"])
     supervisor = Supervisor(tmp_path)
     (tmp_path / "current.json").write_text(
         json.dumps(

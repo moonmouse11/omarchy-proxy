@@ -54,14 +54,13 @@ def test_uninstall_stops_the_core(tmp_path: Path) -> None:
     state = home / ".local/state/omarchy-proxy"
     state.mkdir(parents=True)
     sleep = subprocess.check_output(["sh", "-c", "command -v sleep"], text=True).strip()
+    # A short-lived parent, so a killed child is reaped by init and leaves /proc.
     started = subprocess.run(
         [
             sys.executable,
             "-c",
-            (
-                "import os,sys; pid=os.posix_spawn(sys.argv[1],[sys.argv[1],'30'],"
-                "os.environ,setsid=True); print(pid)"
-            ),
+            "from omarchy_proxy.supervisor import spawn_session; "
+            "import sys; print(spawn_session([sys.argv[1], '30']))",
             sleep,
         ],
         check=True,

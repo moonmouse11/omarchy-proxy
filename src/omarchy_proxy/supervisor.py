@@ -147,7 +147,7 @@ class Supervisor:
             return {"mode": "systemd"}
         self.directory.mkdir(parents=True, exist_ok=True)
         argv = [sys.executable, "-m", "omarchy_proxy.supervisor", str(self.directory)]
-        pid = os.posix_spawn(argv[0], argv, os.environ, setsid=True)
+        pid = spawn_session(argv)
         (self.directory / "supervisor.pid").write_text(str(pid), encoding="utf-8")
         return {
             "mode": "detached",
@@ -175,17 +175,14 @@ class Supervisor:
         thread = threading.Thread(target=self._pump, args=(read_fd,), daemon=True)
         thread.start()
         try:
-            pid = os.posix_spawn(
-                argv[0],
+            pid = spawn_session(
                 argv,
-                os.environ,
-                file_actions=[
+                [
                     (os.POSIX_SPAWN_DUP2, write_fd, 1),
                     (os.POSIX_SPAWN_DUP2, write_fd, 2),
                     (os.POSIX_SPAWN_CLOSE, read_fd),
                     (os.POSIX_SPAWN_CLOSE, write_fd),
                 ],
-                setsid=True,
             )
         finally:
             os.close(write_fd)
@@ -280,6 +277,28 @@ class Supervisor:
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
         os.chmod(path, 0o600)
+
+
+def spawn_session(argv: list[str], file_actions: list[tuple[Any, ...]] | None = None) -> int:
+    """Start ``argv`` in its own session.
+
+    Some Python builds reject ``posix_spawn(..., setsid=True)``. Those builds
+    start a one-line wrapper that calls ``setsid`` and then replaces itself
+    with ``argv``, so the returned pid is still the session leader.
+    """
+    kwargs: dict[str, Any] = {}
+    if file_actions:
+        kwargs["file_actions"] = file_actions
+    try:
+        return os.posix_spawn(argv[0], argv, os.environ, setsid=True, **kwargs)
+    except NotImplementedError:
+        wrapper = [
+            sys.executable,
+            "-c",
+            "import os,sys; os.setsid(); os.execv(sys.argv[1], sys.argv[1:])",
+            *argv,
+        ]
+        return os.posix_spawn(wrapper[0], wrapper, os.environ, **kwargs)
 
 
 def _ensure_free(port: int) -> None:
