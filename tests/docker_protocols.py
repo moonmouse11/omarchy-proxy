@@ -102,7 +102,11 @@ def singbox_server(name: str, inbound: dict) -> subprocess.Popen[bytes]:
 
 
 def client(name: str, backend: XrayBackend | SingBoxBackend, server) -> subprocess.Popen[bytes]:
-    settings = {"socks_port": 19100 + hash(name) % 500, "http_port": 19500, "health_url": "https://example.com/"}
+    settings = {
+        "socks_port": 19100 + hash(name) % 500,
+        "http_port": 19500,
+        "health_url": "https://example.com/",
+    }
     payload = backend.generate_config(server, settings)
     config = write_config(f"{name}-client.json", payload)
     if isinstance(backend, XrayBackend):
