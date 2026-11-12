@@ -59,6 +59,19 @@ if [[ -f $current ]]; then
     rm -f "$current"
 fi
 
+if [[ -x /usr/local/bin/tun-helper ]]; then
+    sudo -n --preserve-env=XDG_STATE_HOME /usr/local/bin/tun-helper down >/dev/null 2>&1 || true
+    printf '%s\n' "sudo rm -f /etc/sudoers.d/omarchy-proxy"
+fi
+
+plugin_dir="$config_root/omarchy/plugins/omarchy-proxy"
+if [[ -d $plugin_dir && ! -e $plugin_dir/.git ]]; then
+    if command -v omarchy >/dev/null 2>&1; then
+        omarchy plugin disable omarchy-proxy >/dev/null 2>&1 || true
+    fi
+    rm -rf "$plugin_dir"
+fi
+
 rm -f "$unit" "$prefix/bin/omarchy-proxy"
 rm -rf "$share"
 

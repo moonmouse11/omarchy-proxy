@@ -7,7 +7,7 @@ with the core's own tool, and reports the installed version.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol, TypedDict, runtime_checkable
+from typing import Any, NotRequired, Protocol, TypedDict, runtime_checkable
 
 from omarchy_proxy.model import Server
 
@@ -27,6 +27,7 @@ class BackendSettings(TypedDict):
     socks_port: int
     http_port: int
     health_url: str
+    tun: NotRequired[bool]
 
 
 @runtime_checkable

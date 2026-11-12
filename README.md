@@ -7,7 +7,7 @@
 ![Omarchy 4](https://img.shields.io/badge/Omarchy-4-1e1e2e)
 ![Arch Linux](https://img.shields.io/badge/Arch_Linux-1793D1?logo=archlinux&logoColor=white)
 
-Bar widget, panel, and window for Omarchy 4. The machine connects to a remote SOCKS5, HTTP, Shadowsocks, VLESS, VMess, Trojan, Hysteria2, or TUIC server. xray or sing-box runs the tunnel. No root, no TUN, no DNS changes.
+Bar widget, panel, and window for Omarchy 4. The machine connects to a remote SOCKS5, HTTP, Shadowsocks, VLESS, VMess, Trojan, Hysteria2, or TUIC server. xray or sing-box runs the tunnel. This version does not capture all traffic: only programs that use the local proxy. A TUN mode that takes the whole machine is required follow-up work and is not in this release. The installer does not use root.
 
 The Tests workflow has two jobs. **unit** runs the pytest suite. **docker** is the connection check: one real proxied HTTP request for each protocol, through xray 1.8.24 and sing-box 1.10.7. There is no third workflow for that.
 
@@ -58,9 +58,10 @@ omarchy-proxy --disconnect
 
 `omarchy-proxy --settings-set mode <manual|system|env-only>`
 
-- **manual** (default) changes nothing outside this program. Apps use `127.0.0.1:10808` (SOCKS) or `127.0.0.1:10809` (HTTP).
-- **system** sets the GNOME proxy keys when that schema exists. Otherwise it writes `~/.config/environment.d/omarchy-proxy.conf`, and `--status` reports `requires_relogin`. Disconnect restores the previous values and deletes only that file.
+- **manual** (default) changes nothing outside this program. Apps use `127.0.0.1:10808` (SOCKS) or `127.0.0.1:10809` (HTTP). Traffic that never uses those ports keeps the machine's real address.
+- **system** sets the GNOME proxy keys when that schema exists. Otherwise it writes `~/.config/environment.d/omarchy-proxy.conf`, and `--status` reports `requires_relogin`. Disconnect restores the previous values and deletes only that file. Programs that ignore the system proxy are not captured.
 - **env-only** does not change desktop settings. Use `omarchy-proxy --env-snippet` or `--proxychains-conf`. Those two commands print the default ports 10808 and 10809, not a custom port from settings.
+- **tun** sends the machine's traffic through sing-box. xray is not used in this mode. The first connect asks for acknowledgement: a crash leaves clear internet blocked until disconnect. `install.sh` prints the `sudo` commands that install `tun-helper` and does not run them. `--doctor` reports `tun_helper_missing` until that file is in `/etc/sudoers.d`. Connect reports `route_owned` when another tunnel, including omarchy-vpn, already holds the default route, and starts nothing.
 
 `backend` is `auto`, `xray`, or `sing-box`. Hysteria2 and TUIC always use sing-box. Ports and the bypass list (`localhost,127.0.0.0/8,::1` by default) apply on the next connect.
 
@@ -70,6 +71,8 @@ omarchy-proxy --disconnect
 - `no_backend` means neither core is on `PATH`.
 - `port_in_use` names the process already bound to the local port. This program does not kill it.
 - `health_timeout` means the core started and the check URL did not succeed within 15 seconds. Exposure is reverted.
+- `route_owned` means another tunnel already has the default route. Tun mode does not start.
+- `tun_helper_missing` means `mode` is `tun` and the sudoers file for `tun-helper` is not installed. The hint is the same pair of commands `install.sh` prints and does not run.
 - The core log is `~/.local/state/omarchy-proxy/core.log`, or under `$XDG_STATE_HOME` when that is set.
 
 ## Security

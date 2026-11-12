@@ -84,6 +84,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Report local setup problems.",
     )
     commands.add_argument(
+        "--ack-tun",
+        action="store_true",
+        help="Record that tun captures the machine and blocks clear internet if the core dies.",
+    )
+    commands.add_argument(
         "--env-snippet",
         action="store_true",
         help="Print shell exports for the local proxy.",
@@ -191,6 +196,11 @@ def _run(args: argparse.Namespace) -> int:
             return emit_ok(server=catalog.toggle_favorite(args.favorite_id))
         if args.status:
             return emit_ok(**status_report())
+        if args.ack_tun:
+            from omarchy_proxy.tun_helper import acknowledge
+
+            acknowledge(state_dir())
+            return emit_ok(tun_acknowledged=True)
         if args.doctor:
             report = doctor_report()
             if any(item["code"] == "no_backend" for item in report["issues"]):

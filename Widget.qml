@@ -13,6 +13,8 @@ BarWidget {
     property var servers: []
     property bool setupNeeded: false
     property bool statusFailed: false
+    property string mode: "manual"
+    property bool tunAck: false
     property string pollInterval: "3000"
     property var jobs: []
 
@@ -54,9 +56,15 @@ BarWidget {
             }
             root.statusFailed = false
             root.status = payload
+            root.tunAck = payload.tun_acknowledged === true
         })
         run(["--servers"], function (payload) {
             root.servers = payload && payload.servers ? payload.servers : []
+        })
+        run(["--settings-get"], function (payload) {
+            var settings = payload && payload.settings ? payload.settings : null
+            if (settings && settings.mode)
+                root.mode = String(settings.mode)
         })
         run(["--doctor"], function (payload) {
             var issues = payload && payload.issues ? payload.issues : (payload && payload.error ? [payload.error] : [])
@@ -70,8 +78,11 @@ BarWidget {
     function close() { if (panelLoader.item) panelLoader.item.close() }
     function togglePanel() { if (panelLoader.item) panelLoader.item.toggle() }
     function openWindow() {
-        if (windowLoader.item)
-            windowLoader.item.show()
+        close()
+        if (!windowLoader.item)
+            return
+        windowLoader.item.visible = false
+        windowLoader.item.visible = true
     }
 
     function injectPanel() {
@@ -126,7 +137,12 @@ BarWidget {
         foreground: root.mark
         tooltipText: root.setupNeeded ? "Setup needed" : (root.connected ? root.serverName() : "Proxy")
         labelText: root.setupNeeded ? "Setup needed" : (root.connected ? root.serverName() : "")
-        onClicked: root.togglePanel()
+        onPressed: function (buttonCode) {
+            if (buttonCode === Qt.RightButton)
+                root.openWindow()
+            else
+                root.togglePanel()
+        }
     }
 
     SequentialAnimation {
@@ -135,12 +151,6 @@ BarWidget {
         onRunningChanged: if (!running) button.opacity = 1
         NumberAnimation { target: button; property: "opacity"; to: 0.35; duration: 500 }
         NumberAnimation { target: button; property: "opacity"; to: 1; duration: 500 }
-    }
-
-    MouseArea {
-        anchors.fill: parent
-        acceptedButtons: Qt.RightButton
-        onClicked: root.openWindow()
     }
 
     Loader {

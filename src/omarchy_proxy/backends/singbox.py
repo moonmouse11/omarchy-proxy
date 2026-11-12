@@ -38,14 +38,34 @@ class SingBoxBackend:
     binary_candidates = ("sing-box",)
 
     def generate_config(self, server: Server, settings: BackendSettings) -> dict[str, Any]:
-        return {
+        outbounds: list[dict[str, Any]] = [
+            {**_outbound(server), "tag": "proxy"},
+            {"type": "direct", "tag": "direct"},
+        ]
+        rules = [] if settings.get("tun") else [_health_rule(settings["health_url"])]
+        config: dict[str, Any] = {
             "inbounds": _inbounds(settings),
-            "outbounds": [
-                {**_outbound(server), "tag": "proxy"},
-                {"type": "direct", "tag": "direct"},
-            ],
-            "route": {"rules": [_health_rule(settings["health_url"])], "final": "proxy"},
+            "outbounds": outbounds,
+            "route": {"rules": rules, "final": "proxy"},
         }
+        if settings.get("tun"):
+            config["inbounds"] = [_tun_inbound(), *config["inbounds"]]
+            rules.insert(0, {"protocol": "dns", "action": "hijack-dns"})
+            config["dns"] = {
+                "servers": [
+                    {
+                        "type": "tls",
+                        "tag": "remote",
+                        "server": "1.1.1.1",
+                        "server_port": 853,
+                        "detour": "proxy",
+                    }
+                ],
+                "rules": [{"port": 53, "server": "remote"}],
+                "final": "remote",
+            }
+            config["route"]["auto_detect_interface"] = True
+        return config
 
     def validate_config(self, path: Path) -> None:
         binary = self._binary()
@@ -93,6 +113,19 @@ def _parse_version(text: str) -> tuple[int, int, int] | None:
     if match is None:
         return None
     return int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+
+def _tun_inbound() -> dict[str, Any]:
+    return {
+        "type": "tun",
+        "tag": "tun-in",
+        "interface_name": "omarchy-tun",
+        "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
+        "auto_route": True,
+        "auto_redirect": True,
+        "strict_route": True,
+        "stack": "system",
+    }
 
 
 def _inbounds(settings: BackendSettings) -> list[dict[str, Any]]:
