@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+import omarchy_proxy.supervisor as supervisor_mod
 from omarchy_proxy.supervisor import Supervisor, SupervisorError, spawn_session
 
 
@@ -42,6 +43,14 @@ def test_start_writes_pid_and_captures_output(tmp_path: Path) -> None:
         assert b"hello-core" in (tmp_path / "core.log").read_bytes()
     finally:
         _stop(state["pid"])
+
+
+def test_setsid_wrapper_still_counts_as_our_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    argv = ["/bin/sleep", "30"]
+    wrapper = [sys.executable, "-c", supervisor_mod._SETSID_WRAPPER, *argv]
+    monkeypatch.setattr(supervisor_mod, "_cmdline", lambda pid: wrapper if pid == 5 else None)
+    assert supervisor_mod._is_ours({"pid": 5, "argv": argv})
+    assert not supervisor_mod._is_ours({"pid": 5, "argv": ["other"]})
 
 
 def test_second_start_is_refused(tmp_path: Path) -> None:

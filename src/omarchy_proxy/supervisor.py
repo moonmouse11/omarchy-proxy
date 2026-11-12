@@ -279,6 +279,9 @@ class Supervisor:
         os.chmod(path, 0o600)
 
 
+_SETSID_WRAPPER = "import os,sys; os.setsid(); os.execv(sys.argv[1], sys.argv[1:])"
+
+
 def spawn_session(argv: list[str], file_actions: list[tuple[Any, ...]] | None = None) -> int:
     """Start ``argv`` in its own session.
 
@@ -295,7 +298,7 @@ def spawn_session(argv: list[str], file_actions: list[tuple[Any, ...]] | None = 
         wrapper = [
             sys.executable,
             "-c",
-            "import os,sys; os.setsid(); os.execv(sys.argv[1], sys.argv[1:])",
+            _SETSID_WRAPPER,
             *argv,
         ]
         return os.posix_spawn(wrapper[0], wrapper, os.environ, **kwargs)
@@ -437,7 +440,14 @@ def _is_ours(current: dict[str, Any]) -> bool:
     argv = current.get("argv")
     if not isinstance(pid, int) or not isinstance(argv, list):
         return False
-    return _cmdline(pid) == [str(part) for part in argv]
+    expected = [str(part) for part in argv]
+    live = _cmdline(pid)
+    if live == expected:
+        return True
+    # posix_spawn without setsid runs a one-line wrapper that then execs argv.
+    # Until that exec, the live command line is the wrapper plus argv.
+    prefix = [sys.executable, "-c", _SETSID_WRAPPER]
+    return live is not None and live[: len(prefix)] == prefix and live[len(prefix) :] == expected
 
 
 def _cmdline(pid: int) -> list[str] | None:
