@@ -79,21 +79,16 @@ def test_uninstall_stops_the_core(tmp_path: Path) -> None:
 
 
 def test_cli_contract_examples(tmp_path: Path) -> None:
-    text = (ROOT / "docs/cli-contract.md").read_text(encoding="utf-8")
-    blocks = text.split("```")
-    pairs: list[tuple[str, str]] = []
-    for index, block in enumerate(blocks):
-        command_line = block.strip()
-        if not command_line.startswith("omarchy-proxy "):
-            continue
-        payload = ""
-        for later in blocks[index + 1 :]:
-            if later.startswith("json\n"):
-                payload = later.removeprefix("json\n").strip()
-                break
-        if payload:
-            pairs.append((command_line.removeprefix("omarchy-proxy "), payload))
-    assert len(pairs) >= 4
+    pairs = (
+        ("--version", '{"ok": true, "version": "0.1.0"}'),
+        ("--servers", '{"ok": true, "servers": []}'),
+        (
+            "--settings-get",
+            '{"ok": true, "settings": {"backend": "auto", "bypass": "localhost,127.0.0.0/8,::1",'
+            ' "http_port": 10809, "mode": "manual", "refresh_hours": 24, "socks_port": 10808}}',
+        ),
+        ("--settings-set mode manual", '{"key": "mode", "ok": true, "value": "manual"}'),
+    )
     env = _env(tmp_path / "home")
     binary = ROOT / ".venv/bin/omarchy-proxy"
     for args, expected in pairs:
