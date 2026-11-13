@@ -268,7 +268,10 @@ def test_stop_does_not_kill_a_foreign_pid(tmp_path: Path) -> None:
         assert result["forced"] is False
         os.kill(pid, 0)
     finally:
-        os.killpg(pid, signal.SIGKILL)
+        # Not killpg: on Python builds without posix_spawn(setsid=True) the
+        # setsid wrapper may not have created the process group yet.
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
         with contextlib.suppress(ChildProcessError):
             os.waitpid(pid, 0)
 
