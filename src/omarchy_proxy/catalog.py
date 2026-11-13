@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 from omarchy_proxy.uri import ParseError, parse_uri, serialize_uri
 
 SCHEMA_VERSION = 1
+_NOT_FOUND = "no server with that id"
 _ID_NAME = "id"
 _UNSET = object()
 
@@ -109,7 +110,7 @@ class Catalog:
             nonlocal warning
             row = next((item for item in data["servers"] if item.get("id") == identity), None)
             if row is None:
-                raise CatalogError("not_found", "no server with that id")
+                raise CatalogError("not_found", _NOT_FOUND)
             urls = _owned_urls(row)
             if urls and not confirm_subscription:
                 raise CatalogError(
@@ -133,7 +134,7 @@ class Catalog:
         for row in self.load()["servers"]:
             if isinstance(row, dict) and row.get("id") == identity:
                 return row
-        raise CatalogError("not_found", "no server with that id")
+        raise CatalogError("not_found", _NOT_FOUND)
 
     def list(self) -> list[dict[str, Any]]:
         rows = list(self.load()["servers"])
@@ -154,7 +155,7 @@ class Catalog:
                     row["uri"] = _uri_named(str(row["uri"]), cleaned)
                     found = row
                     return
-            raise CatalogError("not_found", "no server with that id")
+            raise CatalogError("not_found", _NOT_FOUND)
 
         self._mutate(apply)
         assert found is not None
@@ -170,7 +171,7 @@ class Catalog:
                     row["favorite"] = not bool(row.get("favorite"))
                     found = row
                     return
-            raise CatalogError("not_found", "no server with that id")
+            raise CatalogError("not_found", _NOT_FOUND)
 
         self._mutate(apply)
         assert found is not None
@@ -187,7 +188,7 @@ class Catalog:
                     row["ping_at"] = at
                     found = row
                     return
-            raise CatalogError("not_found", "no server with that id")
+            raise CatalogError("not_found", _NOT_FOUND)
 
         self._mutate(apply)
         assert found is not None
@@ -204,7 +205,7 @@ class Catalog:
                     row["last_used_at"] = stamp
                     found = row
                     return
-            raise CatalogError("not_found", "no server with that id")
+            raise CatalogError("not_found", _NOT_FOUND)
 
         self._mutate(apply)
         assert found is not None

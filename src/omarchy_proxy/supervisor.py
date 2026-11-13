@@ -26,6 +26,7 @@ from omarchy_proxy.health import (
 )
 
 LOG_LIMIT = 1_000_000
+_CURRENT = "current.json"
 _BACKOFF = (1, 2, 4, 8, 16)
 _MAX_FAILURES = 5
 
@@ -142,7 +143,7 @@ class Supervisor:
         forced = False
         if current is not None and _is_ours(current):
             forced = _terminate(int(current["pid"]), grace)
-        path = self.directory / "current.json"
+        path = self.directory / _CURRENT
         if path.exists():
             path.unlink()
         result = {"state": "stopped", "forced": forced}
@@ -269,7 +270,7 @@ class Supervisor:
             write_geo(self.directory, payload)
 
     def _read(self) -> dict[str, Any] | None:
-        path = self.directory / "current.json"
+        path = self.directory / _CURRENT
         if not path.exists():
             return None
         try:
@@ -281,7 +282,7 @@ class Supervisor:
         return cast(dict[str, Any], data)
 
     def _write(self, payload: dict[str, Any]) -> None:
-        path = self.directory / "current.json"
+        path = self.directory / _CURRENT
         temporary = path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload), encoding="utf-8")
         os.chmod(temporary, 0o600)

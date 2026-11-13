@@ -12,6 +12,7 @@ DEFAULT_BYPASS = "localhost,127.0.0.0/8,::1"
 SOCKS_PORT = 10808
 HTTP_PORT = 10809
 ENV_NAME = "omarchy-proxy.conf"
+_ENVIRONMENT_D = "environment.d"
 _SCHEMA = "org.gnome.system.proxy"
 _KEYS = (
     (_SCHEMA, "mode"),
@@ -74,7 +75,7 @@ def proxychains_conf(socks_port: int) -> str:
 
 
 def environment_path(config_home: Path) -> Path:
-    return config_home / "environment.d" / ENV_NAME
+    return config_home / _ENVIRONMENT_D / ENV_NAME
 
 
 class Exposure:
@@ -116,7 +117,7 @@ class Exposure:
                     saved = prior.get(f"{schema} {key}")
                     if isinstance(saved, str):
                         self.runner(["gsettings", "set", schema, key, saved])
-        if current.get("system_mode") == "environment.d":
+        if current.get("system_mode") == _ENVIRONMENT_D:
             environment_path(self.config_home).unlink(missing_ok=True)
         cleared = {
             "active": False,
@@ -141,13 +142,13 @@ class Exposure:
                 "prior": prior,
             }
         else:
-            record = {"system_mode": "environment.d", "requires_relogin": True}
+            record = {"system_mode": _ENVIRONMENT_D, "requires_relogin": True}
         record["active"] = True
         record["mode"] = mode
         self._write(record)
         if record["system_mode"] == "gsettings":
             self._set_gsettings(socks_port, http_port, bypass)
-        elif record["system_mode"] == "environment.d":
+        elif record["system_mode"] == _ENVIRONMENT_D:
             self._write_env(socks_port, http_port, bypass)
         return record
 

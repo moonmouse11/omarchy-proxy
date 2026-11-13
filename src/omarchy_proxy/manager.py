@@ -239,7 +239,6 @@ class Manager:
 
     def _wait_until_healthy(self, socks_port: int, health_url: str, timeout: float) -> str:
         deadline = time.monotonic() + timeout
-        health = "unknown"
         while time.monotonic() < deadline:
             state = self.supervisor.tick(time.monotonic(), socks_port, health_url)
             health = str(state.get("health") or "unknown")
