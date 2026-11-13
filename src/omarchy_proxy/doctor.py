@@ -9,15 +9,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from omarchy_proxy.backends.detect import HINTS
 from omarchy_proxy.catalog import default_path
 from omarchy_proxy.settings import Settings, SettingsError
 from omarchy_proxy.supervisor import state_dir
 from omarchy_proxy.tun_helper import INSTALL_COMMANDS, SUDOERS, acknowledged
 
-_HINTS = {
-    "xray": "yay -S xray-bin",
-    "sing-box": "pacman -S sing-box",
-}
 _PORTS = (10808, 10809)
 
 
@@ -65,7 +62,7 @@ def doctor_report(
     catalog = catalog_path or default_path()
     find = lookup or _which
     backends = []
-    for name, hint in _HINTS.items():
+    for name, hint in HINTS.items():
         found = find(name)
         if found:
             backends.append({"name": name, "path": found, "hint": hint})

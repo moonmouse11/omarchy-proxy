@@ -101,7 +101,10 @@ def fetch(
 
 def parse_document(body: bytes) -> list[str]:
     """Return URI lines from base64, plain text, or a JSON array."""
-    text = body.decode("utf-8")
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SubscriptionError("invalid_document", "subscription body is not UTF-8") from exc
     stripped = text.strip()
     if not stripped:
         return []

@@ -55,13 +55,22 @@ fi
 current="$state_root/omarchy-proxy/current.json"
 if [[ -f $current ]]; then
     core_pid=$("$python" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("pid",""))' "$current" 2>/dev/null || true)
-    stop_group "$core_pid"
+    # current.json can outlive the core; kill only a pid that still looks like ours.
+    if [[ -r /proc/$core_pid/cmdline ]]; then
+        cmdline=$(tr '\0' ' ' < "/proc/$core_pid/cmdline" || true)
+        case $cmdline in
+            *sing-box* | *xray* | *tun-helper*) stop_group "$core_pid" ;;
+        esac
+    fi
     rm -f "$current"
 fi
 
 if [[ -x /usr/local/bin/tun-helper ]]; then
     sudo -n --preserve-env=XDG_STATE_HOME /usr/local/bin/tun-helper down >/dev/null 2>&1 || true
-    printf '%s\n' "sudo rm -f /etc/sudoers.d/omarchy-proxy"
+    printf '%s\n' \
+        "sudo rm -f /etc/sudoers.d/omarchy-proxy" \
+        "sudo rm -f /usr/local/bin/tun-helper" \
+        "sudo rm -rf /usr/local/lib/omarchy-proxy"
 fi
 
 plugin_dir="$config_root/omarchy/plugins/omarchy-proxy"

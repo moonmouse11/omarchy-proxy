@@ -147,3 +147,48 @@ def _http(body: bytes):
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd
+
+
+def test_manager_uses_the_config_home_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from omarchy_proxy.cli import _manager
+
+    _env(tmp_path, monkeypatch)
+    manager = _manager()
+    assert manager.exposure.config_home == tmp_path / "config"
+
+
+def test_ping_parses_vmess_uris(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import base64
+    import json
+
+    _env(tmp_path, monkeypatch)
+    payload = {
+        "v": "2",
+        "ps": "vm",
+        "add": "1.2.3.4",
+        "port": "443",
+        "id": "01234567-89ab-cdef-0123-456789abcdef",
+        "aid": "0",
+        "net": "tcp",
+        "type": "none",
+        "host": "",
+        "path": "",
+        "tls": "",
+    }
+    uri = "vmess://" + base64.b64encode(json.dumps(payload).encode()).decode()
+    assert main(["--import", uri]) == 0
+    seen: dict[str, tuple[str, int]] = {}
+    written: list[dict[str, Any]] = []
+
+    def fake_measure(host: str, port: int) -> int:
+        seen["addr"] = (host, port)
+        return 42
+
+    monkeypatch.setattr("omarchy_proxy.cli.measure", fake_measure)
+    monkeypatch.setattr(
+        "omarchy_proxy.output.emit",
+        lambda payload, stream=None: written.append(payload),
+    )
+    assert main(["--ping", _only_id()]) == 0
+    assert written[-1]["results"] == [{"id": _only_id(), "ping_ms": 42}]
+    assert seen["addr"] == ("1.2.3.4", 443)

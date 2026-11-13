@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from omarchy_proxy.backends.base import BackendSettings
-from omarchy_proxy.backends.xray import MIN_VERSION, BackendError, XrayBackend, _parse_version
+from omarchy_proxy.backends.base import BackendSettings, parse_version
+from omarchy_proxy.backends.xray import MIN_VERSION, BackendError, XrayBackend
 from omarchy_proxy.model import (
     HttpProxyServer,
     Hysteria2Server,
@@ -98,9 +98,9 @@ def test_hysteria2_is_refused() -> None:
 
 
 def test_version_floor() -> None:
-    assert _parse_version("Xray 1.8.0 (Xray)") == MIN_VERSION
-    assert _parse_version("Xray 1.7.5") < MIN_VERSION
-    assert _parse_version("nope") is None
+    assert parse_version("Xray 1.8.0 (Xray)") == MIN_VERSION
+    assert parse_version("Xray 1.7.5") < MIN_VERSION
+    assert parse_version("nope") is None
 
 
 @pytest.mark.skipif(shutil.which("xray") is None, reason="xray binary is not installed")

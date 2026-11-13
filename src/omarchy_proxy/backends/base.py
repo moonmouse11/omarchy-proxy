@@ -6,10 +6,53 @@ with the core's own tool, and reports the installed version.
 
 from __future__ import annotations
 
+import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, NotRequired, Protocol, TypedDict, runtime_checkable
 
 from omarchy_proxy.model import Server
+
+_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+
+
+def parse_version(text: str) -> tuple[int, int, int] | None:
+    """First ``x.y.z`` triple in a ``--version`` banner, or None."""
+    match = _VERSION_RE.search(text)
+    if match is None:
+        return None
+    return int(match.group(1)), int(match.group(2)), int(match.group(3))
+
+
+def find_binary(candidates: tuple[str, ...], name: str) -> str:
+    """First candidate on PATH. Raises when the core is not installed."""
+    for candidate in candidates:
+        found = shutil.which(candidate)
+        if found:
+            return found
+    raise BackendError("backend_missing", f"{name} is not installed")
+
+
+def checked_version(binary: str, name: str, minimum: tuple[int, int, int]) -> str:
+    """Installed version of the core at ``binary``. Raises below ``minimum``."""
+    result = subprocess.run(  # noqa: S603
+        [binary, "version"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        raise BackendError("backend_missing", f"{name} version failed")
+    found = parse_version(result.stdout)
+    if found is None or found < minimum:
+        shown = ".".join(str(part) for part in found) if found else result.stdout.strip()
+        raise BackendError(
+            "backend_too_old",
+            f"{name} {shown} is older than {'.'.join(map(str, minimum))}",
+        )
+    return ".".join(str(part) for part in found)
 
 
 class BackendError(Exception):

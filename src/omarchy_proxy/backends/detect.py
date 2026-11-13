@@ -11,7 +11,7 @@ from omarchy_proxy.backends.xray import XrayBackend
 from omarchy_proxy.model import Hysteria2Server, Server, TuicServer
 
 PREFERENCES = ("auto", "xray", "sing-box")
-_HINTS = {
+HINTS = {
     "xray": "yay -S xray-bin",
     "sing-box": "pacman -S sing-box",
 }
@@ -66,7 +66,7 @@ class Selector:
     def _require(self, backend: Core) -> str:
         path = self._path(backend)
         if path is None:
-            hint = _HINTS.get(backend.name, backend.binary_candidates[0])
+            hint = HINTS.get(backend.name, backend.binary_candidates[0])
             binary = backend.binary_candidates[0]
             raise BackendError(
                 "backend_missing",

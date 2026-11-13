@@ -21,11 +21,7 @@ INTERFACE = "omarchy-tun"
 TABLE = "omarchy-proxy"
 SUDOERS = Path("/etc/sudoers.d/omarchy-proxy")
 HELPER = Path("/usr/local/bin/tun-helper")
-INSTALL_COMMANDS = (
-    "sudo install -m 755 ~/.local/share/omarchy-proxy/tun-helper /usr/local/bin/tun-helper",
-    "sudo install -m 440 ~/.local/share/omarchy-proxy/omarchy-proxy.sudoers "
-    "/etc/sudoers.d/omarchy-proxy",
-)
+INSTALL_COMMANDS = ("./install.sh --with-helper  # run from the omarchy-proxy checkout",)
 REMOVE_SUDOERS = "sudo rm -f /etc/sudoers.d/omarchy-proxy"
 
 
@@ -102,6 +98,9 @@ def foreign_device(route_json: str) -> str | None:
 
 
 def server_addresses(config: dict[str, Any]) -> list[str]:
+    # shortcut: the allow-list freezes the DNS answer from `up` time. A server
+    # hostname whose A records rotate later can end up blocked by the table.
+    # Upgrade: re-resolve and amend the table when the core keeps failing.
     outbounds = config.get("outbounds")
     if not isinstance(outbounds, list):
         raise TunError("invalid_config", "config has no outbounds")

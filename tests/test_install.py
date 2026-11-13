@@ -28,10 +28,7 @@ def test_install_writes_unit_and_version(tmp_path: Path) -> None:
         text=True,
     )
     printed = installed.stdout + installed.stderr
-    assert "sudo install -m 755" in printed
-    assert "sudo install -m 440" in printed
-    assert "/etc/sudoers.d/omarchy-proxy" in printed
-    assert "are not run" in printed
+    assert "./install.sh --with-helper" in printed
     share = home / ".local/share/omarchy-proxy"
     sudoers = (share / "omarchy-proxy.sudoers").read_text(encoding="utf-8")
     assert 'env_keep += "XDG_STATE_HOME"' in sudoers
@@ -119,7 +116,12 @@ def test_uninstall_stops_the_core(tmp_path: Path) -> None:
     home = tmp_path / "home"
     state = home / ".local/state/omarchy-proxy"
     state.mkdir(parents=True)
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
     sleep = subprocess.check_output(["sh", "-c", "command -v sleep"], text=True).strip()
+    fake_xray = bindir / "xray"
+    fake_xray.write_bytes(Path(sleep).read_bytes())
+    fake_xray.chmod(0o755)
     # A short-lived parent, so a killed child is reaped by init and leaves /proc.
     started = subprocess.run(
         [
@@ -127,7 +129,7 @@ def test_uninstall_stops_the_core(tmp_path: Path) -> None:
             "-c",
             "from omarchy_proxy.supervisor import spawn_session; "
             "import sys; print(spawn_session([sys.argv[1], '30']))",
-            sleep,
+            str(fake_xray),
         ],
         check=True,
         capture_output=True,

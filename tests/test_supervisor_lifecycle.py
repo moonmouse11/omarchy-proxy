@@ -2,17 +2,28 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
 import os
+import shutil
 import signal
 import socket
 import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
-from omarchy_proxy.supervisor import LOG_LIMIT, Supervisor, SupervisorError, unit_text
+from omarchy_proxy.supervisor import (
+    LOG_LIMIT,
+    Supervisor,
+    SupervisorError,
+    serve,
+    spawn_session,
+    unit_text,
+)
 
 UUID = "01234567-89ab-cdef-0123-456789abcdef"
 
@@ -243,3 +254,51 @@ def _serve_socks() -> int:
     threading.Thread(target=run, daemon=True).start()
     ready.wait(1)
     return holder["port"]
+
+
+def test_stop_does_not_kill_a_foreign_pid(tmp_path: Path) -> None:
+    sleep = shutil.which("sleep") or "/bin/sleep"
+    pid = spawn_session([sleep, "30"])
+    (tmp_path / "current.json").write_text(
+        json.dumps({"pid": pid, "argv": ["/nope/xray", "run", "-config", "x"]}),
+        encoding="utf-8",
+    )
+    try:
+        result = Supervisor(tmp_path).stop(grace=0.1)
+        assert result["forced"] is False
+        os.kill(pid, 0)
+    finally:
+        os.killpg(pid, signal.SIGKILL)
+        with contextlib.suppress(ChildProcessError):
+            os.waitpid(pid, 0)
+
+
+def test_serve_uses_health_url_and_config_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "config.json").write_text(
+        json.dumps({"outbounds": [{"password": "s3cret-pw"}]}), encoding="utf-8"
+    )
+    (tmp_path / "current.json").write_text(
+        json.dumps({"socks_port": 0, "health_url": "http://h.test/x"}), encoding="utf-8"
+    )
+    seen: dict[str, Any] = {}
+    real_init = Supervisor.__init__
+
+    def init(
+        self: Supervisor, directory: Path | None = None, secrets: list[str] | None = None
+    ) -> None:
+        real_init(self, directory, secrets)
+        seen["self"] = self
+
+    def tick(self: Supervisor, now: float, socks: int, url: str | None = None) -> None:
+        seen["args"] = (socks, url)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Supervisor, "__init__", init)
+    monkeypatch.setattr(Supervisor, "tick", tick)
+    monkeypatch.setattr("omarchy_proxy.supervisor.queue_saved_subscriptions", lambda: [])
+    with pytest.raises(KeyboardInterrupt):
+        serve(tmp_path)
+    assert seen["args"] == (0, "http://h.test/x")
+    assert "s3cret-pw" in seen["self"].secrets

@@ -16,7 +16,7 @@ from omarchy_proxy.backends.base import Backend, BackendError, BackendSettings
 from omarchy_proxy.backends.detect import Selector
 from omarchy_proxy.catalog import Catalog
 from omarchy_proxy.health import DEFAULT_URL
-from omarchy_proxy.model import Server
+from omarchy_proxy.model import Server, server_secrets
 from omarchy_proxy.supervisor import Supervisor, SupervisorError
 from omarchy_proxy.sysproxy import DEFAULT_BYPASS, HTTP_PORT, SOCKS_PORT, Exposure
 from omarchy_proxy.tun_helper import HELPER, TunError, acknowledged, foreign_device, privileged
@@ -98,9 +98,12 @@ class Manager:
                 "tun_unacknowledged",
                 "tun captures all traffic and a crash blocks clear internet until disconnect",
             )
-        chosen, reason = self._backend(server, preference, backend, mode)
         if mode == "tun":
             self._ensure_route_free()
+        chosen, reason = self._backend(server, preference, backend, mode)
+        if chosen.name == "xray" and socks_port == http_port:
+            raise ManagerError("invalid_field", "xray needs different socks and http ports")
+        self.supervisor.secrets = server_secrets(server)
         config = self.state_dir / "config.json"
         settings: BackendSettings = {
             "socks_port": socks_port,
@@ -116,11 +119,12 @@ class Manager:
         except BackendError as exc:
             raise ManagerError(exc.code, exc.message) from exc
         argv = _argv(chosen, config, mode)
+        env = None
         if mode == "tun":
-            os.environ["XDG_STATE_HOME"] = str(self.state_dir.parent)
+            env = {**os.environ, "XDG_STATE_HOME": str(self.state_dir.parent)}
         step("starting")
         try:
-            self.supervisor.start(argv, [socks_port, http_port])
+            self.supervisor.start(argv, [socks_port, http_port], env=env)
         except SupervisorError as exc:
             raise ManagerError(exc.code, exc.message) from exc
         try:
@@ -131,6 +135,7 @@ class Manager:
                 backend=chosen.name,
                 server_id=identity,
                 reason=reason,
+                health_url=health_url,
             )
             self.supervisor._write(current)
             step("exposure")
@@ -182,6 +187,7 @@ class Manager:
             return backend, reason
         try:
             chosen, reason = self.selector.choose(server, preference, mode)
+            chosen.version()
         except BackendError as exc:
             raise ManagerError(exc.code, exc.message) from exc
         return cast(Backend, chosen), reason
@@ -218,13 +224,13 @@ class Manager:
     def _tun_down(self) -> dict[str, str]:
         if not HELPER.is_file():
             return {"tun_error": "tun-helper is not installed"}
-        os.environ["XDG_STATE_HOME"] = str(self.state_dir.parent)
         completed = subprocess.run(  # noqa: S603
             privileged("down"),
             check=False,
             capture_output=True,
             text=True,
             timeout=10,
+            env={**os.environ, "XDG_STATE_HOME": str(self.state_dir.parent)},
         )
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "tun-helper down failed").strip()

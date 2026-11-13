@@ -161,7 +161,9 @@ def test_foreign_route_refuses_connect_before_the_core_starts(
     started: list[list[str]] = []
 
     class Quiet:
-        def start(self, argv: list[str], _ports: list[int]) -> None:
+        def start(
+            self, argv: list[str], _ports: list[int], *, env: dict[str, str] | None = None
+        ) -> None:
             started.append(argv)
 
         def stop(self) -> dict[str, Any]:
@@ -189,7 +191,12 @@ def test_core_argv_uses_the_helper_only_for_tun(tmp_path: Path) -> None:
 
     config = tmp_path / "config.json"
     tun_argv = _argv(Core(), config, "tun")  # type: ignore[arg-type]
-    assert tun_argv[:4] == ["sudo", "-n", "--preserve-env=XDG_STATE_HOME", "/usr/local/bin/tun-helper"]
+    assert tun_argv[:4] == [
+        "sudo",
+        "-n",
+        "--preserve-env=XDG_STATE_HOME",
+        "/usr/local/bin/tun-helper",
+    ]
     assert tun_argv[4:] == ["up", str(config)]
     manual = _argv(Core(), config, "manual")  # type: ignore[arg-type]
     assert manual == ["/bin/sing-box", "run", "-c", "x"]
@@ -219,9 +226,14 @@ def test_tun_connect_does_not_call_gsettings(
             return "1.10.0"
 
     class Quiet:
-        def start(self, argv: list[str], _ports: list[int]) -> None:
+        def start(
+            self, argv: list[str], _ports: list[int], *, env: dict[str, str] | None = None
+        ) -> None:
             assert argv[0] == "sudo"
             assert argv[4:] == ["up", str(state / "config.json")]
+            assert env is not None
+            assert env["XDG_STATE_HOME"] == str(state.parent)
+            captured_env.append(env)
 
         def tick(self, *_args: object, **_kwargs: object) -> dict[str, str]:
             return {"health": "ok"}
@@ -236,6 +248,7 @@ def test_tun_connect_does_not_call_gsettings(
             return {"state": "stopped"}
 
     called: list[str] = []
+    captured_env: list[dict[str, str]] = []
 
     class Exposure:
         def connect(self, mode: str, **_kwargs: object) -> dict[str, str]:
@@ -300,8 +313,7 @@ def test_doctor_reports_a_missing_helper_and_clears_when_installed(tmp_path: Pat
     codes = [item["code"] for item in missing["issues"]]
     assert "tun_helper_missing" in codes
     hint = next(item["hint"] for item in missing["issues"] if item["code"] == "tun_helper_missing")
-    assert "sudo install -m 755" in hint
-    assert "/etc/sudoers.d/omarchy-proxy" in hint
+    assert "install.sh --with-helper" in hint
     present = tmp_path / "sudoers"
     present.write_text("user\n", encoding="utf-8")
     found = doctor_report(tmp_path, tmp_path / "servers.json", mode="tun", sudoers=present)

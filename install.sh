@@ -78,7 +78,7 @@ offer sing-box pacman sing-box
 
 cat > "$share/tun-helper" << EOF
 #!/bin/sh
-export PYTHONPATH="$share"
+export PYTHONPATH="/usr/local/lib/omarchy-proxy"
 export PYTHONDONTWRITEBYTECODE=1
 exec "$python" -B -m omarchy_proxy.tun_helper "\$@"
 EOF
@@ -136,10 +136,15 @@ if [[ $with_helper -eq 1 || -t 0 ]]; then
     sudo visudo -cf "$share/omarchy-proxy.sudoers"
     sudo install -m 755 "$share/tun-helper" /usr/local/bin/tun-helper
     sudo install -m 440 "$share/omarchy-proxy.sudoers" /etc/sudoers.d/omarchy-proxy
+    # The helper runs as root, so its code must be root-owned.
+    sudo rm -rf /usr/local/lib/omarchy-proxy
+    sudo install -d -m 755 /usr/local/lib/omarchy-proxy
+    find "$share/omarchy_proxy" -name '*.py' -print0 |
+        while IFS= read -r -d '' file; do
+            sudo install -D -m 644 "$file" "/usr/local/lib/omarchy-proxy/${file#"$share"/}"
+        done
     printf 'Installed. Proxy is in the %s section of the bar. Next: omarchy-proxy --version\n' "${section:-right}"
 else
-    printf '%s\n' \
-        "sudo install -m 755 \"$share/tun-helper\" /usr/local/bin/tun-helper" \
-        "sudo install -m 440 \"$share/omarchy-proxy.sudoers\" /etc/sudoers.d/omarchy-proxy"
-    printf 'Installed. The commands above are not run. Next: export PATH="$HOME/.local/bin:$PATH" && omarchy-proxy --version\n'
+    printf '%s\n' "The tun helper is not installed. To install it: ./install.sh --with-helper"
+    printf 'Installed. Next: export PATH="$HOME/.local/bin:$PATH" && omarchy-proxy --version\n'
 fi

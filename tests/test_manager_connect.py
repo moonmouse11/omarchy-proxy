@@ -116,3 +116,51 @@ def test_failed_health_reverts_exposure(tmp_path: Path, monkeypatch: pytest.Monk
     assert exc.value.code == "health_timeout"
     assert not (config / "environment.d" / "omarchy-proxy.conf").exists()
     assert not (state / "current.json").exists()
+
+
+class XrayStub(Stub):
+    name = "xray"
+
+
+def test_xray_rejects_equal_ports(tmp_path: Path) -> None:
+    catalog = Catalog(tmp_path / "servers.json")
+    row = catalog.add("socks5://10.0.0.1:1080")
+    state = tmp_path / "state"
+    manager = Manager(state, tmp_path / "config", supervisor=Supervisor(state))
+    with pytest.raises(ManagerError) as exc:
+        manager.connect(
+            catalog,
+            str(row["id"]),
+            backend=XrayStub(),
+            socks_port=19100,
+            http_port=19100,
+        )
+    assert exc.value.code == "invalid_field"
+    assert not (state / "config.json").exists()
+
+
+def test_connect_records_secrets_and_health_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    catalog = Catalog(tmp_path / "servers.json")
+    row = catalog.add("socks5://user123:s3cret-pw@10.0.0.1:1080#Mine")
+    monkeypatch.setattr("omarchy_proxy.supervisor._tcp_open", lambda _port: True)
+    monkeypatch.setattr("omarchy_proxy.supervisor.round_trip", lambda *_args, **_kwargs: 204)
+    monkeypatch.setattr("omarchy_proxy.supervisor.fetch_json", lambda *_args, **_kwargs: {})
+    state = tmp_path / "state"
+    manager = Manager(state, tmp_path / "config", supervisor=Supervisor(state))
+    try:
+        manager.connect(
+            catalog,
+            str(row["id"]),
+            backend=Stub(),
+            socks_port=19110,
+            http_port=19111,
+            health_url="http://example.test/x",
+            timeout=2,
+        )
+        assert "s3cret-pw" in manager.supervisor.secrets
+        current = json.loads((state / "current.json").read_text(encoding="utf-8"))
+        assert current["health_url"] == "http://example.test/x"
+    finally:
+        manager.supervisor.stop()

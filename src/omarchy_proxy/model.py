@@ -275,6 +275,22 @@ Server: TypeAlias = (
 )
 
 
+# ─── Log redaction ────────────────────────────────────────────────────────────
+
+
+_SECRET_FIELDS = ("password", "uuid", "user", "obfs_password")
+
+
+def server_secrets(server: Server) -> list[str]:
+    """Credentials worth redacting from the core log for this server."""
+    values: list[str] = []
+    for name in _SECRET_FIELDS:
+        value = getattr(server, name, None)
+        if isinstance(value, str) and len(value) >= 4:
+            values.append(value)
+    return values
+
+
 # ─── JSON serialization ────────────────────────────────────────────────────────
 
 
