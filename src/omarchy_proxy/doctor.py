@@ -9,13 +9,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from omarchy_proxy.backends.detect import HINTS
 from omarchy_proxy.catalog import default_path
+from omarchy_proxy.settings import Settings, SettingsError
 from omarchy_proxy.supervisor import state_dir
+from omarchy_proxy.tun_helper import INSTALL_COMMANDS, SUDOERS, acknowledged
 
-_HINTS = {
-    "xray": "yay -S xray-bin",
-    "sing-box": "pacman -S sing-box",
-}
 _PORTS = (10808, 10809)
 
 
@@ -46,6 +45,7 @@ def status_report(
         report["requires_relogin"] = bool(exposure.get("requires_relogin"))
     catalog = _read_json(catalog_path or default_path())
     report["subscriptions"] = _subscription_status(catalog)
+    report["tun_acknowledged"] = acknowledged(root)
     return report
 
 
@@ -55,12 +55,14 @@ def doctor_report(
     *,
     lookup: Callable[[str], str | None] | None = None,
     secrets: list[str] | None = None,
+    sudoers: Path | None = None,
+    mode: str | None = None,
 ) -> dict[str, Any]:
     root = directory or state_dir()
     catalog = catalog_path or default_path()
     find = lookup or _which
     backends = []
-    for name, hint in _HINTS.items():
+    for name, hint in HINTS.items():
         found = find(name)
         if found:
             backends.append({"name": name, "path": found, "hint": hint})
@@ -71,6 +73,15 @@ def doctor_report(
                 "code": "no_backend",
                 "message": "neither xray nor sing-box is installed",
                 "hint": "yay -S xray-bin  or  pacman -S sing-box",
+            }
+        )
+    selected = mode if mode is not None else _settings_mode(catalog)
+    if selected == "tun" and not (sudoers or SUDOERS).is_file():
+        issues.append(
+            {
+                "code": "tun_helper_missing",
+                "message": "the tun helper is not installed",
+                "hint": " ; ".join(INSTALL_COMMANDS),
             }
         )
     return {
@@ -106,6 +117,13 @@ def _subscription_status(catalog: dict[str, Any] | None) -> list[dict[str, Any]]
             }
         )
     return visible
+
+
+def _settings_mode(catalog: Path) -> str:
+    try:
+        return str(Settings(catalog.parent / "settings.json").get("mode"))
+    except (OSError, ValueError, SettingsError):
+        return "manual"
 
 
 def _which(name: str) -> str | None:

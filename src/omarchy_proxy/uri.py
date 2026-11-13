@@ -83,6 +83,10 @@ ERROR_CODES = frozenset(
 )
 
 
+_MISSING_HOST = "missing host"
+_MISSING_PASSWORD = "missing password"  # noqa: S105
+
+
 class ParseError(Exception):
     """Machine-readable parse failure. Also raised internally, then returned."""
 
@@ -165,7 +169,7 @@ def _parse(text: str) -> Server:
     parts = urlsplit(raw)
     host = parts.hostname
     if not host:
-        raise ParseError("missing_field", "missing host", scheme=scheme, field="host")
+        raise ParseError("missing_field", _MISSING_HOST, scheme=scheme, field="host")
     try:
         raw_port = parts.port
     except ValueError as exc:
@@ -231,7 +235,7 @@ def _parse_vless(raw: str) -> VlessServer:
         raise ParseError("invalid_uuid", f"invalid uuid: {uuid}", scheme="vless", field="uuid")
     host = parts.hostname
     if not host:
-        raise ParseError("missing_field", "missing host", scheme="vless", field="host")
+        raise ParseError("missing_field", _MISSING_HOST, scheme="vless", field="host")
     try:
         raw_port = parts.port
     except ValueError as exc:
@@ -431,7 +435,7 @@ def _hostport(text: str) -> tuple[str, int]:
         raise ParseError("missing_field", "missing port", scheme="ss", field="port")
     host = unquote(host)
     if not host:
-        raise ParseError("missing_field", "missing host", scheme="ss", field="host")
+        raise ParseError("missing_field", _MISSING_HOST, scheme="ss", field="host")
     try:
         port = int(port_text)
     except ValueError as exc:
@@ -470,7 +474,7 @@ def _parse_trojan(raw: str) -> TrojanServer:
     parts = urlsplit(raw)
     password = _userinfo(parts)
     if not password:
-        raise ParseError("missing_field", "missing password", scheme="trojan", field="password")
+        raise ParseError("missing_field", _MISSING_PASSWORD, scheme="trojan", field="password")
     host, port = _host_port(parts, "trojan", 443)
     params, extra = _split_query(parts.query, _VLESS_KNOWN)
     transport = _vless_transport(params)
@@ -489,7 +493,7 @@ def _parse_hysteria2(raw: str) -> Hysteria2Server:
     parts = urlsplit(raw)
     password = _userinfo(parts)
     if not password:
-        raise ParseError("missing_field", "missing password", scheme="hysteria2", field="password")
+        raise ParseError("missing_field", _MISSING_PASSWORD, scheme="hysteria2", field="password")
     host, port = _host_port(parts, "hysteria2", 443)
     known = _VLESS_KNOWN | {"obfs-password", "congestion_control", "cc"}
     params, extra = _split_query(parts.query, known)
@@ -517,7 +521,7 @@ def _parse_tuic(raw: str) -> TuicServer:
     if not _uuid_ok(uuid):
         raise ParseError("invalid_uuid", f"invalid uuid: {uuid}", scheme="tuic", field="uuid")
     if not password:
-        raise ParseError("missing_field", "missing password", scheme="tuic", field="password")
+        raise ParseError("missing_field", _MISSING_PASSWORD, scheme="tuic", field="password")
     host, port = _host_port(parts, "tuic", 443)
     known = _VLESS_KNOWN | {"congestion_control"}
     params, extra = _split_query(parts.query, known)
@@ -536,7 +540,7 @@ def _parse_tuic(raw: str) -> TuicServer:
 def _host_port(parts: SplitResult, scheme: str, default: int) -> tuple[str, int]:
     host = parts.hostname
     if not host:
-        raise ParseError("missing_field", "missing host", scheme=scheme, field="host")
+        raise ParseError("missing_field", _MISSING_HOST, scheme=scheme, field="host")
     try:
         raw_port = parts.port
     except ValueError as exc:

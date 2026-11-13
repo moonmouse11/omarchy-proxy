@@ -35,6 +35,7 @@ MAX_BYTES = 5 * 1024 * 1024
 CONNECT_TIMEOUT = 15
 TOTAL_TIMEOUT = 30
 MAX_REDIRECTS = 3
+_TIMEOUT_MSG = "subscription fetch timed out"
 
 
 class SubscriptionError(Exception):
@@ -69,7 +70,7 @@ def fetch(
     try:
         response = opener.open(request, timeout=connect_timeout)
     except TimeoutError as exc:
-        raise SubscriptionError("fetch_timeout", "subscription fetch timed out") from exc
+        raise SubscriptionError("fetch_timeout", _TIMEOUT_MSG) from exc
     except urllib.error.HTTPError as exc:
         exc.close()
         if exc.code in {301, 302, 303, 307, 308}:
@@ -77,7 +78,7 @@ def fetch(
         raise SubscriptionError("fetch_failed", f"HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
         if isinstance(exc.reason, TimeoutError):
-            raise SubscriptionError("fetch_timeout", "subscription fetch timed out") from exc
+            raise SubscriptionError("fetch_timeout", _TIMEOUT_MSG) from exc
         raise SubscriptionError("fetch_failed", str(exc.reason)) from exc
     with response:
         _limit_socket(response, min(connect_timeout, _remaining(deadline)))
@@ -85,11 +86,11 @@ def fetch(
         total = 0
         while True:
             if _remaining(deadline) <= 0:
-                raise SubscriptionError("fetch_timeout", "subscription fetch timed out")
+                raise SubscriptionError("fetch_timeout", _TIMEOUT_MSG)
             try:
                 block = response.read(65536)
             except TimeoutError as exc:
-                raise SubscriptionError("fetch_timeout", "subscription fetch timed out") from exc
+                raise SubscriptionError("fetch_timeout", _TIMEOUT_MSG) from exc
             if not block:
                 break
             total += len(block)
@@ -101,7 +102,10 @@ def fetch(
 
 def parse_document(body: bytes) -> list[str]:
     """Return URI lines from base64, plain text, or a JSON array."""
-    text = body.decode("utf-8")
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SubscriptionError("invalid_document", "subscription body is not UTF-8") from exc
     stripped = text.strip()
     if not stripped:
         return []

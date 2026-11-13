@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-import re
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from omarchy_proxy.backends.base import BackendError, BackendSettings
+from omarchy_proxy.backends.base import (
+    BackendError,
+    BackendSettings,
+    checked_version,
+    find_binary,
+)
 from omarchy_proxy.model import (
     GrpcTransport,
     H2Transport,
@@ -27,8 +30,8 @@ from omarchy_proxy.model import (
     WsTransport,
 )
 
-MIN_VERSION = (1, 10, 0)
-_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
+# The TUN DNS config uses the post-1.12 server schema (`type: tls`).
+MIN_VERSION = (1, 12, 0)
 
 
 class SingBoxBackend:
@@ -38,14 +41,34 @@ class SingBoxBackend:
     binary_candidates = ("sing-box",)
 
     def generate_config(self, server: Server, settings: BackendSettings) -> dict[str, Any]:
-        return {
+        outbounds: list[dict[str, Any]] = [
+            {**_outbound(server), "tag": "proxy"},
+            {"type": "direct", "tag": "direct"},
+        ]
+        rules = [] if settings.get("tun") else [_health_rule(settings["health_url"])]
+        config: dict[str, Any] = {
             "inbounds": _inbounds(settings),
-            "outbounds": [
-                {**_outbound(server), "tag": "proxy"},
-                {"type": "direct", "tag": "direct"},
-            ],
-            "route": {"rules": [_health_rule(settings["health_url"])], "final": "proxy"},
+            "outbounds": outbounds,
+            "route": {"rules": rules, "final": "proxy"},
         }
+        if settings.get("tun"):
+            config["inbounds"] = [_tun_inbound(), *config["inbounds"]]
+            rules.insert(0, {"protocol": "dns", "action": "hijack-dns"})
+            config["dns"] = {
+                "servers": [
+                    {
+                        "type": "tls",
+                        "tag": "remote",
+                        "server": "1.1.1.1",
+                        "server_port": 853,
+                        "detour": "proxy",
+                    }
+                ],
+                "rules": [{"port": 53, "server": "remote"}],
+                "final": "remote",
+            }
+            config["route"]["auto_detect_interface"] = True
+        return config
 
     def validate_config(self, path: Path) -> None:
         binary = self._binary()
@@ -61,38 +84,23 @@ class SingBoxBackend:
             raise BackendError("invalid_config", detail or "sing-box rejected the config")
 
     def version(self) -> str:
-        binary = self._binary()
-        result = subprocess.run(  # noqa: S603
-            [binary, "version"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            raise BackendError("backend_missing", "sing-box version failed")
-        found = _parse_version(result.stdout)
-        if found is None or found < MIN_VERSION:
-            shown = ".".join(str(part) for part in found) if found else result.stdout.strip()
-            raise BackendError(
-                "backend_too_old",
-                f"sing-box {shown} is older than {'.'.join(map(str, MIN_VERSION))}",
-            )
-        return ".".join(str(part) for part in found)
+        return checked_version(self._binary(), self.name, MIN_VERSION)
 
     def _binary(self) -> str:
-        for name in self.binary_candidates:
-            found = shutil.which(name)
-            if found:
-                return found
-        raise BackendError("backend_missing", "sing-box is not installed")
+        return find_binary(self.binary_candidates, self.name)
 
 
-def _parse_version(text: str) -> tuple[int, int, int] | None:
-    match = _VERSION_RE.search(text)
-    if match is None:
-        return None
-    return int(match.group(1)), int(match.group(2)), int(match.group(3))
+def _tun_inbound() -> dict[str, Any]:
+    return {
+        "type": "tun",
+        "tag": "tun-in",
+        "interface_name": "omarchy-tun",
+        "address": ["172.19.0.1/30", "fdfe:dcba:9876::1/126"],
+        "auto_route": True,
+        "auto_redirect": True,
+        "strict_route": True,
+        "stack": "system",
+    }
 
 
 def _inbounds(settings: BackendSettings) -> list[dict[str, Any]]:

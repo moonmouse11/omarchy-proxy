@@ -26,6 +26,7 @@ from omarchy_proxy.health import (
 )
 
 LOG_LIMIT = 1_000_000
+_CURRENT = "current.json"
 _BACKOFF = (1, 2, 4, 8, 16)
 _MAX_FAILURES = 5
 
@@ -77,7 +78,12 @@ class Supervisor:
         self._log_lock = threading.Lock()
 
     def start(
-        self, argv: list[str], ports: list[int] | None = None, *, restart: bool = False
+        self,
+        argv: list[str],
+        ports: list[int] | None = None,
+        *,
+        restart: bool = False,
+        env: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         if not argv:
             raise SupervisorError("invalid_field", "missing command")
@@ -96,7 +102,7 @@ class Supervisor:
             self._next_restart_at = None
             self.health = Health()
         self.health.state = "starting"
-        pid = self._spawn(argv)
+        pid = self._spawn(argv, env)
         payload: dict[str, Any] = {
             "state": "running",
             "pid": pid,
@@ -126,14 +132,18 @@ class Supervisor:
         return current
 
     def stop(self, grace: float = 3) -> dict[str, Any]:
-        """SIGTERM, then SIGKILL. A user stop does not restart."""
+        """SIGTERM, then SIGKILL. A user stop does not restart.
+
+        A stale ``current.json`` can outlive the core. The pid is killed only
+        when the live command line still matches what was started.
+        """
         self._stopped = True
         self.health.mark_stopped()
         current = self._read()
         forced = False
-        if current is not None and isinstance(current.get("pid"), int):
+        if current is not None and _is_ours(current):
             forced = _terminate(int(current["pid"]), grace)
-        path = self.directory / "current.json"
+        path = self.directory / _CURRENT
         if path.exists():
             path.unlink()
         result = {"state": "stopped", "forced": forced}
@@ -170,7 +180,7 @@ class Supervisor:
                 handle.write(raw)
             os.chmod(path, 0o600)
 
-    def _spawn(self, argv: list[str]) -> int:
+    def _spawn(self, argv: list[str], env: dict[str, str] | None = None) -> int:
         read_fd, write_fd = os.pipe()
         thread = threading.Thread(target=self._pump, args=(read_fd,), daemon=True)
         thread.start()
@@ -183,6 +193,7 @@ class Supervisor:
                     (os.POSIX_SPAWN_CLOSE, read_fd),
                     (os.POSIX_SPAWN_CLOSE, write_fd),
                 ],
+                env=env,
             )
         finally:
             os.close(write_fd)
@@ -259,7 +270,7 @@ class Supervisor:
             write_geo(self.directory, payload)
 
     def _read(self) -> dict[str, Any] | None:
-        path = self.directory / "current.json"
+        path = self.directory / _CURRENT
         if not path.exists():
             return None
         try:
@@ -271,7 +282,7 @@ class Supervisor:
         return cast(dict[str, Any], data)
 
     def _write(self, payload: dict[str, Any]) -> None:
-        path = self.directory / "current.json"
+        path = self.directory / _CURRENT
         temporary = path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload), encoding="utf-8")
         os.chmod(temporary, 0o600)
@@ -282,7 +293,11 @@ class Supervisor:
 _SETSID_WRAPPER = "import os,sys; os.setsid(); os.execv(sys.argv[1], sys.argv[1:])"
 
 
-def spawn_session(argv: list[str], file_actions: list[tuple[Any, ...]] | None = None) -> int:
+def spawn_session(
+    argv: list[str],
+    file_actions: list[tuple[Any, ...]] | None = None,
+    env: dict[str, str] | None = None,
+) -> int:
     """Start ``argv`` in its own session.
 
     Some Python builds reject ``posix_spawn(..., setsid=True)``. Those builds
@@ -292,8 +307,9 @@ def spawn_session(argv: list[str], file_actions: list[tuple[Any, ...]] | None = 
     kwargs: dict[str, Any] = {}
     if file_actions:
         kwargs["file_actions"] = file_actions
+    spawn_env = env or os.environ
     try:
-        return os.posix_spawn(argv[0], argv, os.environ, setsid=True, **kwargs)
+        return os.posix_spawn(argv[0], argv, spawn_env, setsid=True, **kwargs)
     except NotImplementedError:
         wrapper = [
             sys.executable,
@@ -301,7 +317,7 @@ def spawn_session(argv: list[str], file_actions: list[tuple[Any, ...]] | None = 
             _SETSID_WRAPPER,
             *argv,
         ]
-        return os.posix_spawn(wrapper[0], wrapper, os.environ, **kwargs)
+        return os.posix_spawn(wrapper[0], wrapper, spawn_env, **kwargs)
 
 
 def _ensure_free(port: int) -> None:
@@ -395,13 +411,42 @@ def _reap(pid: int) -> int | None:
 def serve(directory: Path) -> None:
     """Keep ticking until the process is killed."""
     supervisor = Supervisor(directory)
+    supervisor.secrets = config_secrets(directory / "config.json")
     queue_saved_subscriptions()
     while True:
         current = supervisor._read() or {}
         port = current.get("socks_port")
         socks = port if isinstance(port, int) else 0
-        supervisor.tick(time.monotonic(), socks)
+        raw_url = current.get("health_url")
+        url = raw_url if isinstance(raw_url, str) else None
+        supervisor.tick(time.monotonic(), socks, url)
         time.sleep(0.2)
+
+
+_SECRET_KEYS = {"id", "password", "private_key", "short_id", "user", "username", "uuid"}
+
+
+def config_secrets(path: Path) -> list[str]:
+    """Secret-looking strings in a generated core config. Used for log redaction."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    found: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key in _SECRET_KEYS and isinstance(value, str) and len(value) >= 4:
+                    found.append(value)
+                else:
+                    walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(data)
+    return found
 
 
 def queue_saved_subscriptions() -> list[str]:

@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from omarchy_proxy.backends.base import BackendSettings
-from omarchy_proxy.backends.singbox import MIN_VERSION, SingBoxBackend, _parse_version
+from omarchy_proxy.backends.base import BackendSettings, parse_version
+from omarchy_proxy.backends.singbox import MIN_VERSION, SingBoxBackend
 from omarchy_proxy.model import (
     Hysteria2Server,
     RealityParams,
@@ -103,8 +103,8 @@ def test_split_ports_and_mixed_inbound() -> None:
 
 
 def test_version_floor() -> None:
-    assert _parse_version("sing-box version 1.10.0") == MIN_VERSION
-    assert _parse_version("sing-box version 1.9.0") < MIN_VERSION
+    assert parse_version("sing-box version 1.12.0") == MIN_VERSION
+    assert parse_version("sing-box version 1.11.0") < MIN_VERSION
 
 
 @pytest.mark.skipif(shutil.which("sing-box") is None, reason="sing-box binary is not installed")

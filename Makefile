@@ -53,8 +53,8 @@ test-docker: docker/bin/xray docker/bin/sing-box ## Proxied request per protocol
 	docker build -t omarchy-proxy-test -f docker/Dockerfile .
 	docker run --rm -v "$(CURDIR)":/src -w /src -e PYTHONPATH=/src/src omarchy-proxy-test
 
-install: ## Install the plugin backend and systemd user unit
-	./install.sh
+install: ## Install the plugin backend, systemd user unit, and tun helper
+	./install.sh --with-helper
 
 uninstall: ## Remove installed files; keeps user config/state
 	./uninstall.sh

@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-import re
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-from omarchy_proxy.backends.base import BackendError, BackendSettings
-
-__all__ = ["BackendError", "XrayBackend"]
+from omarchy_proxy.backends.base import (
+    BackendError,
+    BackendSettings,
+    checked_version,
+    find_binary,
+)
 from omarchy_proxy.model import (
     GrpcTransport,
     H2Transport,
@@ -30,7 +31,6 @@ from omarchy_proxy.model import (
 )
 
 MIN_VERSION = (1, 8, 0)
-_VERSION_RE = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 
 
 class XrayBackend:
@@ -87,38 +87,10 @@ class XrayBackend:
             raise BackendError("invalid_config", detail or "xray rejected the config")
 
     def version(self) -> str:
-        binary = self._binary()
-        result = subprocess.run(  # noqa: S603
-            [binary, "version"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            raise BackendError("backend_missing", "xray version failed")
-        found = _parse_version(result.stdout)
-        if found is None or found < MIN_VERSION:
-            shown = ".".join(str(part) for part in found) if found else result.stdout.strip()
-            raise BackendError(
-                "backend_too_old",
-                f"xray {shown} is older than {'.'.join(map(str, MIN_VERSION))}",
-            )
-        return ".".join(str(part) for part in found)
+        return checked_version(self._binary(), self.name, MIN_VERSION)
 
     def _binary(self) -> str:
-        for name in self.binary_candidates:
-            found = shutil.which(name)
-            if found:
-                return found
-        raise BackendError("backend_missing", "xray is not installed")
-
-
-def _parse_version(text: str) -> tuple[int, int, int] | None:
-    match = _VERSION_RE.search(text)
-    if match is None:
-        return None
-    return int(match.group(1)), int(match.group(2)), int(match.group(3))
+        return find_binary(self.binary_candidates, self.name)
 
 
 def _health_rule(url: str) -> dict[str, Any]:

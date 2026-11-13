@@ -14,6 +14,7 @@ from omarchy_proxy.socks5 import SocksError, connect
 DEFAULT_URL = "https://www.gstatic.com/generate_204"
 DEFAULT_GEO_URL = "http://ip-api.com/json"
 GEO_TTL = 300
+_TIMEOUT_MSG = "round trip timed out"
 _GEO_FIELDS = ("query", "country", "countryCode", "city", "isp")
 
 
@@ -43,7 +44,7 @@ class GeoCache:
             return self.payload
         try:
             raw = fetch()
-        except (OSError, TimeoutError, ValueError, HealthError):
+        except (OSError, ValueError, HealthError):
             return self.payload
         if not isinstance(raw, dict):
             return self.payload
@@ -112,7 +113,7 @@ def round_trip(
         )
     except (TimeoutError, SocksError) as exc:
         if isinstance(exc, TimeoutError) or "timed out" in str(exc).lower():
-            raise HealthError("timeout", "round trip timed out") from exc
+            raise HealthError("timeout", _TIMEOUT_MSG) from exc
         raise HealthError("socks_error", exc.message) from exc
     try:
         if parts.scheme == "https":
@@ -125,7 +126,7 @@ def round_trip(
         sock.sendall(f"GET {path} HTTP/1.0\r\nHost: {host}\r\n\r\n".encode())
         reply = sock.recv(65536)
     except TimeoutError as exc:
-        raise HealthError("timeout", "round trip timed out") from exc
+        raise HealthError("timeout", _TIMEOUT_MSG) from exc
     except ssl.SSLError as exc:
         raise HealthError("socks_error", "tls handshake failed") from exc
     finally:
@@ -156,7 +157,7 @@ def fetch_json(
         sock = connect("127.0.0.1", port, host, remote_port, timeout=timeout)
     except (TimeoutError, SocksError) as exc:
         if isinstance(exc, TimeoutError) or "timed out" in str(exc).lower():
-            raise HealthError("timeout", "round trip timed out") from exc
+            raise HealthError("timeout", _TIMEOUT_MSG) from exc
         raise HealthError("socks_error", exc.message) from exc
     try:
         if parts.scheme == "https":
@@ -172,7 +173,7 @@ def fetch_json(
                 break
             chunks.append(block)
     except TimeoutError as exc:
-        raise HealthError("timeout", "round trip timed out") from exc
+        raise HealthError("timeout", _TIMEOUT_MSG) from exc
     finally:
         sock.close()
     raw = b"".join(chunks)

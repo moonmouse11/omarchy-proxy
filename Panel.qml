@@ -1,6 +1,4 @@
 import QtQuick
-import QtQuick.Controls
-import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -15,6 +13,8 @@ Panel {
     property var host: null
     property var anchorItem: null
     property string busy: ""
+    property bool confirmTun: false
+    property string pendingId: ""
 
     KeyboardPanel {
         id: popup
@@ -27,27 +27,31 @@ Panel {
         contentWidth: popup.fittedContentWidth(Style.space(360))
         contentHeight: popup.fittedContentHeight(column.implicitHeight)
 
-        ColumnLayout {
+        Column {
             id: column
             width: popup.contentWidth - popup.padding * 2
             spacing: Style.space(10)
 
-            Label {
-                textFormat: Text.PlainText
+            Text {
+                width: parent.width
                 text: root.host && root.host.setupNeeded ? "Setup needed"
                       : root.host && root.host.connected ? root.host.serverName()
                       : root.host && root.host.failed ? "Proxy failed"
                       : "Proxy stopped"
                 color: Color.foreground
+                font.family: Style.resolvedFontFamily
                 font.pixelSize: Style.font.heading
+                elide: Text.ElideRight
             }
 
-            RowLayout {
+            Row {
+                spacing: Style.space(8)
                 Button {
                     text: root.host && root.host.connected ? "Disconnect" : "Connect"
-                    enabled: root.busy === ""
+                    bordered: true
+                    fontFamily: Style.resolvedFontFamily
                     onClicked: {
-                        if (!root.host)
+                        if (root.busy !== "" || !root.host)
                             return
                         if (root.host.connected) {
                             root.busy = "Stopping"
@@ -75,46 +79,98 @@ Panel {
                 Button {
                     visible: root.host && root.host.setupNeeded
                     text: "Finish setup"
+                    bordered: true
+                    fontFamily: Style.resolvedFontFamily
                     onClicked: setupProc.running = true
                 }
             }
 
-            Label {
-                visible: root.busy !== ""
-                textFormat: Text.PlainText
-                text: root.busy
-                color: Color.muted
+            Text {
+                visible: root.confirmTun
+                width: parent.width
                 wrapMode: Text.WordWrap
-                Layout.fillWidth: true
+                color: Color.foreground
+                font.family: Style.resolvedFontFamily
+                font.pixelSize: Style.font.body
+                text: "Tun captures all machine traffic. If the core crashes, clear internet stays blocked until disconnect."
+            }
+            Row {
+                visible: root.confirmTun
+                spacing: Style.space(8)
+                Button {
+                    text: "Capture traffic"
+                    bordered: true
+                    fontFamily: Style.resolvedFontFamily
+                    onClicked: {
+                        root.confirmTun = false
+                        var id = root.pendingId
+                        root.host.run(["--ack-tun"], function () {
+                            root.host.tunAck = true
+                            root.connectTo(id)
+                        })
+                    }
+                }
+                Button {
+                    text: "Cancel"
+                    bordered: true
+                    fontFamily: Style.resolvedFontFamily
+                    onClicked: root.confirmTun = false
+                }
             }
 
-            RowLayout {
-                Layout.fillWidth: true
+            Text {
+                visible: root.busy !== ""
+                width: parent.width
+                text: root.busy
+                color: Color.muted
+                font.family: Style.resolvedFontFamily
+                font.pixelSize: Style.font.body
+                wrapMode: Text.WordWrap
+            }
+
+            Row {
+                width: parent.width
                 spacing: Style.space(6)
                 Repeater {
                     model: root.favorites()
                     delegate: Button {
                         required property var modelData
                         text: modelData.name || modelData.id
+                        bordered: true
+                        fontFamily: Style.resolvedFontFamily
                         onClicked: root.connectTo(String(modelData.id))
                     }
                 }
             }
 
-            Label {
+            Text {
                 visible: root.host && root.host.connected
-                textFormat: Text.PlainText
+                width: parent.width
                 color: Color.foreground
+                font.family: Style.resolvedFontFamily
+                font.pixelSize: Style.font.body
                 wrapMode: Text.WordWrap
-                Layout.fillWidth: true
                 text: root.summary()
             }
 
-            RowLayout {
-                Button { text: "Refresh"; onClicked: root.host.run(["--refresh"], function () { root.host.refresh() }) }
-                Button { text: "Ping"; onClicked: root.host.run(["--ping"], function () { root.host.refresh() }) }
+            Row {
+                spacing: Style.space(8)
+                Button {
+                    text: "Refresh"
+                    bordered: true
+                    fontFamily: Style.resolvedFontFamily
+                    onClicked: root.host.run(["--refresh"], function () { root.host.refresh() })
+                }
+                Button {
+                    text: "Ping"
+                    bordered: true
+                    fontFamily: Style.resolvedFontFamily
+                    onClicked: root.host.run(["--ping"], function () { root.host.refresh() })
+                }
                 Button {
                     text: "Doctor"
+                    bordered: true
+                    fontFamily: Style.resolvedFontFamily
                     onClicked: root.host.run(["--doctor"], function (payload) {
                         if (payload && payload.ok === false && payload.error)
                             root.busy = String(payload.error.message || payload.error.code || "")
@@ -122,7 +178,12 @@ Panel {
                             root.busy = ""
                     })
                 }
-                Button { text: "Settings"; onClicked: root.host.openWindow() }
+                Button {
+                    text: "Settings"
+                    bordered: true
+                    fontFamily: Style.resolvedFontFamily
+                    onClicked: root.host.openWindow()
+                }
             }
         }
     }
@@ -153,6 +214,11 @@ Panel {
     }
 
     function connectTo(id) {
+        if (root.host && root.host.mode === "tun" && !root.host.tunAck) {
+            root.pendingId = id
+            root.confirmTun = true
+            return
+        }
         root.busy = "Connecting"
         root.host.run(["--connect", id], function () {
             root.busy = ""

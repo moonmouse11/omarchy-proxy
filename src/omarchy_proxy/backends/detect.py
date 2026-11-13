@@ -11,7 +11,7 @@ from omarchy_proxy.backends.xray import XrayBackend
 from omarchy_proxy.model import Hysteria2Server, Server, TuicServer
 
 PREFERENCES = ("auto", "xray", "sing-box")
-_HINTS = {
+HINTS = {
     "xray": "yay -S xray-bin",
     "sing-box": "pacman -S sing-box",
 }
@@ -28,9 +28,18 @@ class Selector:
         self.singbox = SingBoxBackend()
         self._versions: dict[str, tuple[int, str]] = {}
 
-    def choose(self, server: Server, preference: str = "auto") -> tuple[Core, str]:
+    def choose(
+        self, server: Server, preference: str = "auto", mode: str = "manual"
+    ) -> tuple[Core, str]:
         if preference not in PREFERENCES:
             raise BackendError("invalid_field", f"unknown backend preference: {preference}")
+        if mode == "tun":
+            if self._path(self.singbox) is None:
+                raise BackendError(
+                    "no_backend",
+                    "sing-box is not installed. Install it with: pacman -S sing-box",
+                )
+            return self.singbox, "tun_requires_singbox"
         if isinstance(server, (Hysteria2Server, TuicServer)):
             self._require(self.singbox)
             return self.singbox, "protocol_requires_singbox"
@@ -57,7 +66,7 @@ class Selector:
     def _require(self, backend: Core) -> str:
         path = self._path(backend)
         if path is None:
-            hint = _HINTS.get(backend.name, backend.binary_candidates[0])
+            hint = HINTS.get(backend.name, backend.binary_candidates[0])
             binary = backend.binary_candidates[0]
             raise BackendError(
                 "backend_missing",

@@ -102,3 +102,11 @@ def server() -> _Box:
     finally:
         httpd.shutdown()
         httpd.server_close()
+
+
+def test_non_utf8_body_is_an_invalid_document() -> None:
+    from omarchy_proxy.subscriptions import parse_document
+
+    with pytest.raises(SubscriptionError) as exc:
+        parse_document(b"\xff\xfe\x00binary")
+    assert exc.value.code == "invalid_document"

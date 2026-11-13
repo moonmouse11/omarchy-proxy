@@ -10,8 +10,10 @@ Currently wired: ``--version`` and the catalog commands.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
+from pathlib import Path
 from urllib.parse import urlsplit
 
 from omarchy_proxy import __version__
@@ -29,8 +31,9 @@ from omarchy_proxy.output import (
 from omarchy_proxy.ping import is_fresh, measure, ping_many
 from omarchy_proxy.settings import Settings, SettingsError
 from omarchy_proxy.subscriptions import SubscriptionError, refresh
-from omarchy_proxy.supervisor import state_dir
+from omarchy_proxy.supervisor import config_secrets, state_dir
 from omarchy_proxy.sysproxy import HTTP_PORT, SOCKS_PORT, env_snippet, proxychains_conf
+from omarchy_proxy.uri import ParseError, parse_uri
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -82,6 +85,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--doctor",
         action="store_true",
         help="Report local setup problems.",
+    )
+    commands.add_argument(
+        "--ack-tun",
+        action="store_true",
+        help="Record that tun captures the machine and blocks clear internet if the core dies.",
     )
     commands.add_argument(
         "--env-snippet",
@@ -191,8 +199,13 @@ def _run(args: argparse.Namespace) -> int:
             return emit_ok(server=catalog.toggle_favorite(args.favorite_id))
         if args.status:
             return emit_ok(**status_report())
+        if args.ack_tun:
+            from omarchy_proxy.tun_helper import acknowledge
+
+            acknowledge(state_dir())
+            return emit_ok(tun_acknowledged=True)
         if args.doctor:
-            report = doctor_report()
+            report = doctor_report(secrets=config_secrets(state_dir() / "config.json"))
             if any(item["code"] == "no_backend" for item in report["issues"]):
                 raise CliError("no_backend", "neither xray nor sing-box is installed", report)
             return emit_ok(**report)
@@ -219,8 +232,8 @@ def _run(args: argparse.Namespace) -> int:
 
 
 def _manager() -> Manager:
-    root = Catalog().path.parent
-    return Manager(state_dir(), root)
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return Manager(state_dir(), config_home)
 
 
 def _connect(catalog: Catalog, identity: str) -> int:
@@ -297,8 +310,11 @@ def _ping(catalog: Catalog, identity: str, *, favorites: bool) -> int:
         if is_fresh(row, now):
             results.append({"id": row["id"], "ping_ms": row.get("ping_ms")})
             continue
-        parts = urlsplit(str(row["uri"]))
-        pending.append({"id": row["id"], "host": parts.hostname or "", "port": parts.port or 0})
+        server = parse_uri(str(row["uri"]))
+        if isinstance(server, ParseError):
+            results.append({"id": row["id"], "ping_ms": None})
+            continue
+        pending.append({"id": row["id"], "host": server.host, "port": server.port})
     measured, _peak = ping_many(pending, measure)
     for item in measured:
         catalog.set_ping(str(item["id"]), item["ping_ms"], now)

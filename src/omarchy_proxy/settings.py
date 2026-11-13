@@ -11,7 +11,7 @@ from omarchy_proxy.catalog import default_path
 from omarchy_proxy.sysproxy import DEFAULT_BYPASS, HTTP_PORT, SOCKS_PORT
 
 _CHOICES = {
-    "mode": ("manual", "system", "env-only"),
+    "mode": ("manual", "system", "env-only", "tun"),
     "backend": ("auto", "xray", "sing-box"),
 }
 _DEFAULTS: dict[str, Any] = {
